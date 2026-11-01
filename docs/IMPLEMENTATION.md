@@ -260,3 +260,87 @@ SHA256：`1308778091ff2de00fa1c0569250bafabecc92db9e992732333736d0e78c8216`
 - fnOS 文档：`developer.fnnas.com/docs/core-concepts/framework/`、`/docs/cli/fnpack`、`/docs/core-concepts/environment-variables/`
 - fnpack：`static2.fnnas.com/fnpack/fnpack-1.2.3-windows-amd64`
 - 实机环境：飞牛 NAS <nas-ip>（Debian 12 bookworm / x86_64 / 23GB RAM / 30TB 可用）
+
+---
+
+## 附录：自动化仓库（fnos-hermes-desktop）
+
+### 仓库结构
+
+```
+fnos-hermes-desktop/
+├── .github/workflows/
+│   ├── build.yml              # 定时/手动构建 + 发 Release
+│   └── sync.yml               # 每 6 小时检测上游变更，有变化才触发构建
+├── scripts/
+│   ├── build.sh               # 完整构建：克隆上游 → 构建渲染层 → 打包 fpk
+│   ├── smoke.sh               # 快速冒烟（约 1 分钟，不编译渲染层）
+│   └── push.sh                # 一键创建远程仓库 + 推送 + 触发 CI
+├── packaging/fpk/             # fpk 模板（渲染层构建时注入，不入库）
+├── docs/IMPLEMENTATION.md
+└── README.md / README.en.md
+```
+
+### 工作流设计
+
+| 工作流 | 触发 | 职责 |
+|---|---|---|
+| `sync.yml` | 每 6 小时 | 对比上游 commit，写入 `.upstream-sha`，有变化才 dispatch |
+| `build.yml` | 每日 03:17 / 手动 / 脚本变更 | 完整构建 → 上传 artifact → 发 Release（tag 已存在则只补传附件） |
+
+两者配合：`sync.yml` 反应快（6 小时），`build.yml` 兜底（每天必构建一次）。
+
+### 构建验证结果（e5 实测）
+
+从 `git archive` 导出的纯净快照开始，等价于 CI 的干净克隆：
+
+```
+[build] 上游最新版本 0.22.5
+[build] 渲染层就绪：1081 个文件，47M
+[build] 完成：dist/hermes-desktop.fpk
+[build]   版本   0.22.5（上游 a4994d4e）
+[build]   大小   16728259 字节
+build.sh exit=0
+```
+
+产物校验：22 个包内条目 / 1087 个渲染层文件 / manifest 字段正确。
+
+### 产物在 NAS 上的实机验证
+
+CI 构建出的 fpk 传到 NAS 后解包安装：
+
+```
+[1/5] 解包 → 1081 个渲染层文件
+[2/5] 脚本换行符 → ✓ 全部 LF
+[3/5] install_callback → ✓ hermes vgit.a4994d4 就绪，webapp 子命令可用
+[4/5] 启动 → gateway running，登录 200，GET / 200 <title>Hermes</title>
+```
+
+**完整闭环：源码 → 自动构建 → fpk → NAS 安装 → 登录可用。**
+
+### 版本号获取
+
+浅克隆拿不到 tag，改用 GitHub API：
+
+```bash
+curl -fsSL https://api.github.com/repos/NousResearch/hermes-agent/releases/latest \
+  | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\{0,1\}\([^"]*\)".*/\1/p'
+```
+
+### 换行符问题（必须处理）
+
+Windows 上开发、Linux 上执行，`cmd/` 下的脚本若被转成 CRLF 会直接
+`bad interpreter: /bin/bash^M`。已用 `.gitattributes` 强制：
+
+```gitattributes
+*.sh text eol=lf
+packaging/fpk/cmd/* text eol=lf
+```
+
+### 踩坑补充
+
+- `fnpack` 没有 `--version` 参数（Windows 版有，Linux 版无）→ 改为打印已知版本号
+- GitHub Actions 的 YAML 多行字符串里，notes 用 `--notes-file` 传文件更稳，
+  直接写多行标量会被 `:` 等字符干扰解析
+- 上游 `pyproject.toml` 的 `version = "0.0.0"`（构建期占位），
+  真实版本只在 git tag 上 → 必须走 API 或指定 tag ref
