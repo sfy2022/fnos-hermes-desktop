@@ -1,19 +1,51 @@
 #!/bin/bash
 #
-# 卸载后回调 — 停止残留进程
-# 数据目录由 fnOS 保留，用户会话与配置不丢失。
+# 卸载后回调 — 清理残留进程
+#
+# 注意：
+#   1) 用户可能选了「删除数据」，此时 TRIM_PKGVAR 已被 fnOS 删掉，
+#      不能假定数据目录存在，也不能往不存在的目录写日志。
+#   2) 进程匹配用本应用路径前缀，而不是 `pkill -f "hermes gateway"`
+#      —— 实际命令行里 hermes 与 gateway 之间隔着 runpy 代码，
+#      那样匹配不到，会留下僵尸进程占用端口。
+#      带路径前缀也确保不会误杀用户手动跑的其它 Hermes 实例。
 
-LOG_FILE="${TRIM_PKGVAR}/info.log"
+LOG_DIR="${TRIM_PKGVAR}"
+LOG_FILE="${LOG_DIR}/info.log"
+PID_FILE="${LOG_DIR}/app.pid"
 
 log_msg() {
+    # 数据目录可能已被删除；写不进去就跳过，不报错
+    mkdir -p "${LOG_DIR}" 2>/dev/null || true
+    [ -d "${LOG_DIR}" ] || return 0
     echo "$(date '+%Y-%m-%d %H:%M:%S') - [uninstall_callback] $1" >> "${LOG_FILE}" 2>/dev/null || true
 }
 
-pkill -TERM -f "hermes gateway" 2>/dev/null || true
-pkill -TERM -f "hermes serve" 2>/dev/null || true
-sleep 1
-pkill -KILL -f "hermes gateway" 2>/dev/null || true
-pkill -KILL -f "hermes serve" 2>/dev/null || true
+stop_app_processes() {
+    # 1) PID 文件精确终止（文件可能已随数据目录删除）
+    if [ -f "${PID_FILE}" ]; then
+        local pid
+        pid="$(head -n 1 "${PID_FILE}" 2>/dev/null | tr -d '[:space:]')"
+        if [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null; then
+            kill -TERM "${pid}" 2>/dev/null || true
+            local i=0
+            while kill -0 "${pid}" 2>/dev/null && [ "${i}" -lt 10 ]; do
+                sleep 1
+                i=$((i + 1))
+            done
+            kill -KILL "${pid}" 2>/dev/null || true
+        fi
+        rm -f "${PID_FILE}" 2>/dev/null || true
+    fi
 
-log_msg "卸载清理完成，用户数据已保留"
+    # 2) 兜底：按本应用路径匹配
+    pkill -TERM -f "${TRIM_PKGVAR}/venv/bin" 2>/dev/null || true
+    pkill -TERM -f "${TRIM_PKGVAR}.*gateway" 2>/dev/null || true
+    sleep 2
+    pkill -KILL -f "${TRIM_PKGVAR}/venv/bin" 2>/dev/null || true
+    pkill -KILL -f "${TRIM_PKGVAR}.*gateway" 2>/dev/null || true
+}
+
+stop_app_processes
+log_msg "卸载清理完成"
 exit 0

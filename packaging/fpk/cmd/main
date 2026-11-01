@@ -268,7 +268,16 @@ stop_process() {
         fi
         rm -f "${PID_FILE}"
     fi
-    pkill -f "hermes gateway" 2>/dev/null || true
+    # 兜底清理残留进程。
+    # 注意：不能用 `pkill -f "hermes gateway"` —— 实际命令行里
+    # "hermes" 与 "gateway" 之间隔着 runpy 代码，那样匹配不到，
+    # 会留下进程继续占用 9120 端口。改用本应用 venv 路径匹配，
+    # 带路径前缀也不会误杀用户手动跑的其它 Hermes 实例。
+    pkill -TERM -f "${DATA_DIR}/venv/bin" 2>/dev/null || true
+    pkill -TERM -f "${DATA_DIR}.*gateway" 2>/dev/null || true
+    sleep 1
+    pkill -KILL -f "${DATA_DIR}/venv/bin" 2>/dev/null || true
+    pkill -KILL -f "${DATA_DIR}.*gateway" 2>/dev/null || true
     log_msg "已停止"
     return 0
 }
