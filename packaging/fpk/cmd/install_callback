@@ -567,15 +567,26 @@ deploy_fnos_auth_plugin() {
         return 0
     fi
 
-    mkdir -p "${DATA_DIR}/plugins" 2>/dev/null || true
-    rm -rf "${dst}"
-    if ! cp -r "${src}" "${dst}" 2>/dev/null; then
-        log_msg "复制 fnOS 授权插件失败，跳过（可在插件市场手动安装）"
-        return 0
-    fi
-    # 只读加载即可：Hermes 设了 PYTHONDONTWRITEBYTECODE=1，不会写 __pycache__
-    chmod -R a+rX "${dst}" 2>/dev/null || true
-    log_msg "fnOS 授权插件已部署到 ${dst}"
+    # 部署到**两个**位置，缺一不可：
+    #   ${DATA_DIR}/src/plugins/  —— 源码树里的 bundled 插件，dashboard tab
+    #                                只有在这里才会被自动挂载
+    #   ${DATA_DIR}/plugins/      —— 用户插件目录（get_hermes_home()/plugins），
+    #                                给 PM 与 fnos_auth_* 工具用
+    # 只放后者时 tab 不出现（实测），因为 bundled 与 user 插件走不同的发现路径。
+    local dst_src="${DATA_DIR}/src/plugins/fnos-auth"
+    mkdir -p "${DATA_DIR}/plugins" "${DATA_DIR}/src/plugins" 2>/dev/null || true
+
+    for dst in "${dst_src}" "${DATA_DIR}/plugins/fnos-auth"; do
+        rm -rf "${dst}"
+        if cp -r "${src}" "${dst}" 2>/dev/null; then
+            # 只读加载即可：Hermes 设了 PYTHONDONTWRITEBYTECODE=1，不写 __pycache__
+            chmod -R a+rX "${dst}" 2>/dev/null || true
+            log_msg "fnOS 授权插件已部署到 ${dst}"
+        else
+            log_msg "复制 fnOS 授权插件到 ${dst} 失败，跳过"
+        fi
+    done
+    return 0
 }
 
 deploy_fnos_skill() {
