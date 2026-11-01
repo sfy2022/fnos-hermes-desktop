@@ -1,503 +1,380 @@
 # Hermes Desktop 飞牛原生版 — 实施报告
 
-> 日期：2026-11-01 ｜ 目标：让 NAS 上像 Windows 一样使用 Hermes Desktop，且**不改一行官方代码**
-> 状态：**已在飞牛 NAS 实机跑通全链路**（Debian 12 / x86_64 / 23GB 内存）
+> 日期：2026-11-02 ｜ 目标：让 NAS 上像本地一样使用 Hermes Desktop，且**不改一行官方代码**
+> 状态：**网页入口可用**；**桌面内嵌为实验性**（依赖飞牛网关透传 WebSocket）
+> 实机环境：fnOS / x86_64 / N5095
+
+本文记录**怎么做的**与**为什么这么做**。凡是踩过的坑都写了判定方法，
+便于后来者（包括未来的自己）少走弯路。
 
 ---
 
 ## 一、结论
 
-**可行，而且不需要 Electron、不需要虚拟显示、不需要串流。**
+把 Hermes 官方桌面端的 **Webapp bundle**（`dist-webapp`）打包成 fnOS 应用，
+在 NAS 上运行上游的 `hermes gateway`，浏览器访问即得到**原版 Desktop 界面**。
 
-官方 Hermes Desktop 的渲染层有**两套构建产物**：
+不改动任何上游代码，不跑 Electron，不需要虚拟显示串流。官方 Desktop 的 UI
+与浏览器 Dashboard 本就共用同一套传输层、同一套会话与工具，所以这里承载的是
+**真品**而非复刻。
 
-| 产物 | 用途 | 本方案 |
-|---|---|---|
-| Electron 包（AppImage/deb/rpm） | 桌面客户端 | ✗ 官方 Linux 发行腿已禁用，且 NAS 无显示环境 |
-| **Webapp bundle**（`dist-webapp`） | **浏览器里的 Desktop 工作区** | ✅ **采用这个** |
-
-关键在于 `hermes_cli/webapp.py` 的注释：
-
-> *"Build and launch plumbing for the browser-hosted **Desktop workspace**. The browser surface shares Hermes' hardened dashboard server. This module owns only the separate renderer artifact... it never creates a second HTTP/WebSocket stack."*
-
-**官方自己就把 Desktop 渲染层做成了可在浏览器运行的形态**，并且与原生 Desktop **共用同一套 `apps/shared/` 传输层、同一套 UI 代码、同一套会话与工具**。
-
-所以「仿照 Desktop 做飞牛的」不是仿造，是**启用官方已有的第二形态**。
+代价是浏览器形态的固有限制（见「已知限制」），核心 Agent 能力一项不少。
 
 ---
 
 ## 二、架构
 
 ```
-飞牛桌面（浏览器外壳）
-   └── iframe → http://<NAS_IP>:9120/
-                    │
-                    ▼
-            hermes gateway run
-            ├── dashboard mount 伺服 app/webapp（1081 个文件的官方渲染层）
-            ├── JSON-RPC / WebSocket  ← 与原生 Desktop 完全相同的协议
-            └── HERMES_HOME（会话/记忆/技能/配置）
-                    │
-                    ▼
-                 模型 API
+                    ┌──────────────────────────────────────┐
+   局域网用户 ─────▶│  http://<nas>:9120    网页入口        │──┐
+                    │  浏览器直连，Hermes basic_auth 把关    │  │
+                    └──────────────────────────────────────┘  │
+                                                              │
+                    ┌──────────────────────────────────────┐  │
+   飞牛桌面用户 ───▶│  http://<nas>:5666/app/hermes-desktop │  │
+                    │  fnOS 统一网关，校验飞牛登录态         │  │
+                    └───────────────┬──────────────────────┘  │
+                                    │ app.sock                │
+                    ┌───────────────▼──────────────────────┐  │
+                    │  gateway_proxy.py（网关适配层）        │  │
+                    │  · 剥离 /app/hermes-desktop 前缀       │  │
+                    │  · HTML 改写（子路径基准、桥接注入）    │  │
+                    │  · WebSocket 升级转发                 │  │
+                    └───────────────┬──────────────────────┘  │
+                                    │ 127.0.0.1:9120          │
+                    ┌───────────────▼──────────────────────┐◀─┘
+                    │  hermes gateway（webapp 渲染层）      │
+                    │  Agent / 工具 / 会话 / 技能 / 定时任务 │
+                    └──────────────────────────────────────┘
 ```
 
-- 渲染层来源：官方仓库 `apps/desktop/scripts/build-webapp.mjs` → Vite 构建 → `dist-webapp`
-- **未修改任何官方代码**：只是把官方构建产物打包进 fpk，用 `HERMES_WEBAPP_DIST` 指过去
-- 桌面入口：`app/ui/config` 用 `type: iframe`，飞牛桌面内嵌窗口打开（与原生应用的观感一致）
+两个入口访问**同一个后端、同一份会话**。
+
+### 端口分工
+
+| 端口 | 监听 | 用途 |
+|---|---|---|
+| `9120` | `0.0.0.0` | Hermes webapp，网页入口直连 |
+| `9120` | `127.0.0.1` | 适配层的上游目标 |
+| `9121` | `127.0.0.1` | 适配层 TCP 通道（仅本机，排障用） |
+| `5666` | fnOS | 统一网关，内嵌入口经此进入 |
 
 ---
 
-## 三、已验证的功能（实机）
+## 三、关键设计决策
 
-在 NAS 上用 Playwright 实测，界面元素完整呈现：
+### 1. 用 Webapp bundle，不用 Electron
 
-**侧边栏**：Sessions / Bots / New session / Terminal
-**管理面板**：Capabilities / Messaging / Artifacts / Scheduled jobs / New project / Profiles
-**主区**：`NEW SESSION` + "Type a task, question, or snippet..."
-**状态栏**：Backend 状态、Smart client 版本
-**首次进入**：官方 onboarding 引导页（"Let's get you setup with Hermes Agent" → Nous Portal / Other providers / I have an API key）
+官方 Linux 发行腿已禁用，NAS 也没有显示环境。而 `hermes_cli/webapp.py` 明确写着：
 
-**控制台错误：0**
+> *Build and launch plumbing for the browser-hosted **Desktop workspace**. The browser
+> surface **shares Hermes' hardened dashboard server**... it never creates a second
+> HTTP/WebSocket stack.*
 
-### 认证链路（实测）
+即官方 Desktop UI 本身就是浏览器应用，打包渲染层即可，无需改造。
 
-| 场景 | 结果 |
-|---|---|
-| `POST /auth/password-login` 正确密码 | ✅ 200 `{"ok":true,"next":"/"}` |
-| 认证后 `GET /` | ✅ 200 `<title>Hermes</title>`，静态资源 200 |
-| 错误密码 | ✅ 401 `Invalid credentials` |
-| 未认证访问 | ✅ 302 跳转登录页 |
+### 2. 绑定 `0.0.0.0`，并且**必须**配 `dashboard.basic_auth`
 
-### 生命周期（实测）
+这是本项目最容易踩、也最致命的一条。上游
+`src/hermes_cli/web_server_boundary.py`：
 
-| 步骤 | 退出码 |
-|---|---|
-| `install_callback` | 0 |
-| `cmd/main start` | 0 |
-| `cmd/main stop` | 0 |
-| `cmd/main status`（运行时） | 0 |
-| `cmd/main status`（停止后） | 3 |
-
----
-
-## 四、实测踩过的坑（全部已固化进脚本）
-
-这一节是本次最有价值的产出——**每个坑都是实机跑出来的**。
-
-### 坑 1：PyPI 上的版本没有 `webapp` 子命令
-
-- PyPI `hermes-agent` 最高仅 **0.19.0**，而 0.19.0 **没有 `hermes webapp`** 命令
-- Webapp 是之后才加入的 → **必须装 GitHub 源码版**（editable）
-- PyPI 最新版与 GitHub 最新版（v0.22.5）**严重脱节**
-
-### 坑 2：源码要求 Python 3.14，不是 3.11
-
-`pyproject.toml` 里依赖按 `python_version >= '3.14'` 声明：
-
-```toml
-"ruamel.yaml==0.18.16; python_version >= '3.14'",
+```python
+def should_require_auth(host: str, allow_public: bool = False) -> bool:
+    """True iff the auth gate must be active: any non-loopback bind."""
+    return host not in _LOOPBACK_HOST_VALUES
 ```
 
-但 `hermes_yaml.py` **无条件 import 它** → 3.11 环境直接 `ModuleNotFoundError: ruamel`。
-**必须用 Python 3.14 建 venv**（uv 可自管下载）。
+**它只看配置里的绑定地址，不看请求的 Host 头。** 因此：
 
-### 坑 3：uv 的 `exclude-newer` + 国内镜像 = 依赖全被过滤
+- 绑 `0.0.0.0` → 强制认证门；没有 auth provider 时**拒绝启动 webapp**
+- 拒绝的表现极具误导性：gateway 主循环照跑、进程活着、**端口不监听**，
+  外部看到的是「打不开 / 502」，日志里只有一句 ERROR
+- **白名单绕不过**：`trusted_public_hosts` 只参与 Host 头校验（`_is_accepted_host`），
+  与认证判定无关
 
-现象：
+认证要求 `password_hash`（**scrypt，不是明文**）：
 
-```
-error: No solution found when resolving dependencies
-  cause: Because there are no versions of defusedxml ...
-hint: `defusedxml` was filtered by `exclude-newer` to only include packages uploaded before 2026-10-29
-```
-
-根因（对照实验定位）：
-- uv 0.13.6 **默认带 exclude-newer**（截止其构建日 2026-10-29）
-- **国内 PyPI 镜像不携带 `upload-time` 元数据** → uv 无法判断上传时间 → 全部误判为"过新"而过滤
-- 实测：`pypi.org` + 不设 exclude → 成功；清华源 + 任意 exclude → 失败
-
-**解法**：`UV_INDEX_URL=https://pypi.org/simple` + `--exclude-newer 2027-01-01`
-
-### 坑 4：NAS 连不上 github.com
-
-```
-Failed to connect to github.com port 443 after 135181 ms
-```
-
-**解法**：多路备援 —— git clone → codeload 直连 → gh-proxy.com → ghproxy.net → github 直连。
-实测 `gh-proxy.com` 可用（200），且 `curl` 必须加 `--http1.1`（NAS 上 HTTP/2 有流异常）。
-
-### 坑 5：uv 的下载 URL 不能拼
-
-`https://pypi.org/simple/uv/uv-x86_64-unknown-linux-gnu.whl` → **404**。因为 wheel 文件名带版本号
-（`uv-0.13.6-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl`），各源命名还不一样。
-
-**解法**：改用 **PyPI JSON API** 精确定位：
-`GET https://pypi.org/pypi/uv/json` → 取 `info.version` → 匹配 `releases[version]` 里的 linux wheel → 拿 `url`。
-
-### 坑 6：安装阶段拿不到 `TRIM_SERVICE_PORT`
-
-fnOS 在安装阶段可能不注入该变量 → 我第一版写出的 config 里 `port:` 是**空的** → webapp 未真正启用。
-
-**解法**：加兜底 + 数字校验：
 ```bash
-SERVICE_PORT="${TRIM_SERVICE_PORT:-9120}"
-case "${SERVICE_PORT}" in ''|*[!0-9]*) SERVICE_PORT="9120" ;; esac
+cd /vol1/@appdata/hermes-desktop
+HERMES_PW='你的密码' PYTHONPATH=src venv/bin/python3 -c \
+  'import os; from plugins.dashboard_auth.basic import hash_password; \
+   print(hash_password(os.environ["HERMES_PW"]))'
 ```
 
-### 坑 7：fnOS 的 `wizard/*` 必须是 JSON 数组
+> 曾试图「绑回环免登录 + 适配层转发」换取免登录 —— 技术上可行，但适配层一旦
+> 对局域网开端口，就是**局域网任何人无需认证即可操作 Agent**（执行命令、读写文件）。
+> Hermes 的一次性启动链接本意是限制「同 OS 用户」，代理代取会绕过它。已放弃该方案。
 
-写成 shell 脚本 → `fnpack build` 直接报错 `File "install" is not valid due to JSON format`。
+### 3. 内嵌入口走统一网关（实验性）
 
-### 坑 8：`webapp --status` 说 "off" 是假象
+原因：iframe 直接指向 `:9120` 属跨源，`SameSite=lax` 的会话 Cookie 不会发送，
+登录状态维持不住。走 `:5666` 网关则与飞牛桌面同源，且网关会校验飞牛登录态。
 
-它读的是 `~/.hermes/config.yaml`（默认路径），而我们的配置在 `HERMES_HOME`。**不影响实际运行**——
-HTTP 200 与 UI 渲染才是真相。
+代价是引入三层复杂性（前缀改写、WS 转发、凭证域），详见「已知限制」。
+
+### 4. 桌面入口用 `type: url` + 应用端口
+
+参考官方示例集合 `conversun/fnos-apps`：**绝大多数应用**都是
+
+```json
+{ "type": "url", "protocol": "http", "port": "<应用端口>", "url": "/" }
+```
+
+即点图标在浏览器打开应用端口。官方开发指南里也没有统一网关的专门章节，
+其 iframe 示例同样是 `protocol` + `port` 直连。
+
+**一个反例必须记住**：`ui/config` 里的 `port` 必须是**应用自己的端口**。
+曾为让网页入口走网关而写成 `port: "5666"`（宿主端口），结果 **fnOS 整个
+`ui/config` 都失效，所有图标都打不开**。
+
+### 5. 不换端口，只清理占用者
+
+早期实现里，`pick_port` 在 9120 被占用时会顺延到 `29220-29259`，并把结果
+**永久写进 `config.yaml`**。一次临时占用就让端口永久漂移，之后与 `ui/config`
+里的 9120 对不上 —— 表现为「启动成功但端口不监听」。
+
+现在改为：端口被占就先清理同 home 的残留实例，清不掉就**明确失败**并提示，
+绝不悄悄换端口。
 
 ---
 
-## 五、交付物
+## 四、运行期踩坑（这轮的主要发现）
+
+### 坑 A：数据目录混入其他属主的文件 → 应用身份静默退出
+
+**这是最隐蔽的一个。** Hermes 以 `hermes-desktop` 身份运行。若用其他账号
+（例如 SSH 登录的管理员）手工跑过 `hermes`，会留下该账号属主的文件：
+`webapp/session-token`、`gateway.lock`、`tools/`、`cron/ticker_heartbeat` 等。
+
+应用身份读写不了这些文件，**会在日志初始化之前就退出** —— 日志里一行错都没有，
+只有启动横幅一闪而过。
+
+```bash
+# 排查
+find /vol1/@appdata/hermes-desktop ! -user hermes-desktop
+
+# 修复：删掉让应用身份重建（先确认无重要数据）
+```
+
+**纪律：永远不要用别的账号手动跑 Hermes。** 排障请用 Web UI 的终端栏
+（那里是应用身份）。
+
+### 坑 B：日志要看对地方
+
+`cmd/main` 写的 `info.log` 往往只有启动横幅。真实错误在：
+
+```
+$DATA_DIR/logs/gateway.log
+$DATA_DIR/logs/gateway-exit-diag.log
+$DATA_DIR/logs/gateway-shutdown-diag.log
+```
+
+`gateway-exit-diag.log` 是 JSON 行，含 `gateway.start` / `asyncio.run.returned` /
+`gateway.exit_nonzero` 三类事件，配合 PID 能判断进程是正常退出还是被杀。
+
+### 坑 C：WebSocket 不能用 `http.client` 转发
+
+前端报：
+
+```
+Hermes couldn't start — Desktop IPC bridge is unavailable.
+```
+
+「IPC 桥」就是那条 WebSocket。适配层最初的 socket 通道用 `http.client`，
+它只读一个完整 HTTP 响应就结束，**扛不住握手后的帧流**。
+
+修法：检测 `Upgrade: websocket` 后切裸 socket 双向对拷 —— 握手阶段改写
+`Host`/`Origin`/`Referer`，收到 `101` 后 `select` 轮询两端转发。
+TCP 通道本来就是裸转发，天然支持。
+
+### 坑 D：子路径下前端跳回站点根
+
+Hermes 前端用 `window.__HERMES_BASE_PATH__` 拼所有路由与跳转，上游默认注入空串。
+在网关子路径下，`location.href = basePath + "/"` 就变成站点根 `/` —— 浏览器解析成
+`http://<nas>:5666/`，**落到飞牛桌面**。
+
+修法：在 `rewrite_html` 里把它改成网关前缀。这比钩 `location.href` 可靠得多 ——
+那个属性的 setter 在多数浏览器里无法覆盖（桥接脚本只能钩 `assign`/`replace`，
+直接赋值绕过了它）。
+
+### 坑 E：`webapp-launch` 返回 `sign_in` 时不能拿来重定向
+
+配了 `basic_auth` 后，控制 socket 的 `webapp-launch` 回的是：
+
+```json
+{"ok": true, "result": {"url": "http://127.0.0.1:9120/", "sign_in": true}}
+```
+
+这是「请先去登录」的根地址，**不是一次性启动链接**。若把它当前缀拼接，
+得到 `/app/hermes-desktop/` —— 302 到自己，浏览器无限重定向，iframe 里表现为空白。
+
+修法：识别 `result.sign_in` 就直接放行，让上游自己 302 到 `/login`。
+
+### 坑 F：卸载残留导致无法安装
+
+```
+无法安装 hermes-desktop
+创建虚拟环境失败：A directory already exists at .../venv
+```
+
+卸载时选了「保留数据」或卸载中断，`venv` 留在原地，`uv` 拒绝在已存在目录上创建。
+已改为 `uv venv --clear`，并加兜底：残留目录不完整（缺 `bin/python3`）就先删再建。
+
+### 坑 G：图标"太小"
+
+不是尺寸问题（官方 `fnos-apps` 只用 `64.png`），而是两点：
+
+1. 原图 1254×1254，但内容边界只有 **817×776** —— 四周留白约 40%，
+   缩到 64px 后实际图形只剩约 42px
+2. Hermes 标志是中性灰线稿 + 透明底，放在深色桌面上对比度极低
+
+处理：按 `getbbox()` 裁到内容边界 → 放到浅色圆角底（内边距 2%）→
+**内容占比 96%**。翅膀、肩甲、权杖在小尺寸下都能辨认。
+
+---
+
+## 五、构建期踩坑
+
+这些是打包与安装阶段的问题，都已固化进 `scripts/build.sh` 与 `packaging/fpk/cmd/`。
+
+| # | 问题 | 处理 |
+|---|---|---|
+| 1 | PyPI 上的版本没有 `webapp` 子命令 | 必须从源码安装，不能只装 PyPI 包 |
+| 2 | 源码要求 **Python 3.14**，不是 3.11 | 用 uv 建 3.14 venv；3.12 仅作回退 |
+| 3 | uv 的 `exclude-newer` + 国内镜像 = 依赖全被过滤 | 走官方 pm 安装（自带哈希锁定） |
+| 4 | NAS 直连 github.com 不稳定 | 构建在 e5 完成，只把产物传到 NAS |
+| 5 | uv 的下载 URL 不能手工拼 | 用 uv 自身命令，不构造 URL |
+| 6 | 安装阶段拿不到 `TRIM_SERVICE_PORT` | 以 manifest 的 `service_port` 兜底 |
+| 7 | fnOS 的 `wizard/*` 必须是 JSON 数组 | 严格按数组结构生成 |
+| 8 | `webapp --status` 报 "off" 是假象 | 以端口是否监听为准，不看该状态 |
+
+构建需要 **Node ≥ 26**（官方 build 脚本要求）。e5 上备有 `/tmp/node26` 与
+`/tmp/extra-libs`（glibc 补丁），完整命令见 `scripts/build.sh`。
+
+---
+
+## 六、交付物
 
 ### fpk 结构
 
 ```
-hermes-desktop-fpk/
-├── manifest                 # appname/version/platform/service_port=9120/checkport
-├── app/
-│   ├── ui/config            # iframe 入口 → 9120
-│   └── webapp/              # 官方渲染层（1081 文件，47MB）
+hermes-desktop.fpk
+├── app.tgz              # 渲染层 + 内置飞牛 Skill（约 23 MB）
 ├── cmd/
-│   ├── main                 # start/stop/status/restart/log
-│   ├── install_init         # 清残留进程
-│   ├── install_callback     # 装 uv → 拉源码 → Py3.14 venv → editable 安装 → 写配置
-│   ├── upgrade_init/callback
-│   ├── uninstall_init/callback
-│   └── config_init/callback
-├── config/{privilege,resource}
-└── wizard/{install,upgrade,uninstall,config}   # JSON
+│   ├── main             # 生命周期：start / stop / status
+│   ├── install_callback # 装 uv → 拉源码 → venv → editable 安装 → 写配置
+│   ├── install_init / upgrade_callback / uninstall_callback
+│   ├── gateway_proxy.py # 网关适配层（前缀剥离、HTML 改写、WS 转发）
+│   └── fnos_bridge.py   # 注入页面的前缀桥接脚本
+├── config/              # privilege / resource
+├── wizard/              # install / config / upgrade / uninstall（JSON 数组）
+├── ICON.PNG / ICON_256.PNG
+└── manifest
 ```
 
-### 安装向导（2 步）
+### 安装时生成的 `config.yaml`
 
-**第 1 步 · 访问账号**
-- 访问用户名（默认 admin）
-- 访问密码（留空则**随机生成 20 位强密码**）
-- 提示：登录后等同授予本机命令执行权限，勿公网暴露
+```yaml
+webapp:
+  enabled: true
+  host: 0.0.0.0        # 局域网可访问；因此必须配认证
+  port: 9120
+  public_url: ""
 
-**第 2 步 · 网络配置**
-- GitHub 下载通道：自动探测（推荐）/ gh-proxy.com / ghproxy.net / codeload / 直连
-- Python 依赖源：PyPI 官方（推荐，元数据完整）/ 清华 / 阿里云
+dashboard:
+  basic_auth:          # 缺这一段，webapp 不会启动
+    username: admin
+    password_hash: "scrypt$..."   # 哈希，非明文
+```
 
-### 关键设计
-
-- **路径全部由 `TRIM_*` 推导**，不硬编码卷号（兼容 vol1/vol2/volX）
-- **`HERMES_HOME` 指向 `TRIM_PKGVAR`** → 会话/记忆/技能/配置全在应用数据目录，卸载保留
-- **`HERMES_WEBAPP_DIST` 指向打包的渲染层** → 运行时不需 Node、不需源码构建
-- **端口占用自动回退** 9120 → 29220
-- **错误写入 `TRIM_TEMP_LOGFILE`** → fnOS 以对话框展示给用户
-- **访问信息写入 `access-info.txt`**（权限 600），用户可查随机密码
+`install_callback` 用 venv 里的 `hash_password` 现场生成哈希；生成失败时
+自动回退 `host: 127.0.0.1`，保证应用至少能起来。
 
 ---
 
-## 六、限制与说明
+## 七、已知限制
 
-### 浏览器形态相比原生 Electron 少了什么
+### 桌面内嵌的三个前提
 
-官方文档明确列出（属于 Electron 独有能力）：
+内嵌入口要真正可用，需同时满足：
 
-- 全局快捷键、置顶浮窗、OS 窗口检查、外部终端唤起
-- `safeStorage` 凭据加密存储
-- 麦克风/语音、系统通知、剪贴板读取（**需 HTTPS 安全上下文**，HTTP 下浏览器禁用）
-- 应用内更新器
+1. **网关透传 `Upgrade: websocket`** —— 部分 fnOS 版本不支持
+2. **代理层把前端路由挂到子路径** —— 已通过改写 `__HERMES_BASE_PATH__` 解决
+3. **WS 端点接受的会话凭证在子路径下仍有效** —— 实测上游 WS 端点即便直连也要求凭证
 
-### 保留下来的（Agent 核心价值全在）
+第 1、3 项依赖飞牛网关实现，本项目无法完全控制。若提示
+`Desktop IPC bridge is unavailable`，**改用网页入口**，它不经过网关，功能完整。
 
-- 完整对话：流式输出、工具调用可视化、结构化工具摘要
-- 会话历史、Profiles 切换、Skills 管理、Cron 定时任务
-- 文件浏览、并排预览、Artifacts、Git 审阅、终端栏
-- 消息网关（微信/QQ/飞书/Telegram 等）、MCP 集成
-- 与 CLI / Desktop / 网关共享同一套会话与队列
+### 浏览器形态相比 Electron 少了什么
+
+- 无系统托盘 / 原生通知
+- 无本地文件选择器的原生路径（走浏览器上传）
+- 无自动更新（由 fpk 版本管理）
+- 无桌面级硬件加速集成
+
+**Agent 核心能力（工具调用、代码执行、文件读写、定时任务、多 Profile、
+技能、MCP、持久记忆）全部保留。**
 
 ### 安全提醒
 
-登录后的用户**等同于授予本机命令执行权限**（能跑 terminal 工具、读写文件、访问凭据）。
-本应用默认绑定 `0.0.0.0:9120` 且强制密码认证。**切勿直接暴露到公网**；需要外网访问请用 VPN / 反代 + HTTPS。
+登录后等同于授予本机命令执行权限。**切勿直接暴露到公网**；
+外网访问请用 VPN / Tailscale，或反代 + HTTPS。
 
 ---
 
-## 七、构建产物说明
+## 八、排障速查
 
-**渲染层 bundle** 的构建过程（在 e5 上完成）：
+| 现象 | 先看 | 常见原因 |
+|---|---|---|
+| 点启动失败 | `logs/gateway.log` | 缺 `dashboard.basic_auth` |
+| 启动横幅一闪而过 | `find $DATA_DIR ! -user hermes-desktop` | 数据目录属主污染 |
+| 9120 不监听 | `grep -A3 '^webapp:' config.yaml` | 端口漂移 / 绑定地址与认证不匹配 |
+| 网页入口 502 | `ss -ltn \| grep 9120` | 上游未启动 |
+| 内嵌空白/转圈 | 适配层 `gateway-proxy.log` | 302 死循环（`sign_in` 未识别） |
+| 内嵌提示 IPC bridge | 浏览器 Network 看 WS | 网关未透传 Upgrade |
+| 登录后跳飞牛桌面 | 页面里搜 `__HERMES_BASE_PATH__` | 未被改写 |
+| 安装报 venv 已存在 | — | 卸载残留，`rm -rf venv` 后重装 |
+
+---
+
+## 附录 A：内置飞牛 Skill
+
+应用内置**飞牛官方 fnOS Skill**（`trim-cli` + 知识文档），装完 Agent 即具备
+操作本机 NAS 的能力：文件、Docker、应用中心、存储与 RAID、相册、日志监控、
+网络电源、用户权限、下载任务。
+
+**需要一次 OAuth 授权**（Authorization Code + PKCE，Agent 不能代你确认）：
 
 ```bash
-# 需要 Node >= 26（官方 build 脚本要求）
-node apps/desktop/scripts/build-webapp.mjs --deps-only   # npm ci，跳过 Electron 二进制
-node apps/desktop/scripts/build-webapp.mjs               # Vite 构建 → apps/desktop/dist-webapp
+/var/apps/hermes-desktop/var/skills/fnos-trim/scripts/trim-cli login --no-open
 ```
 
-产出：`dist-webapp/` 1081 文件 / 47MB → tar.gz 16.8MB
-SHA256：`1308778091ff2de00fa1c0569250bafabecc92db9e992732333736d0e78c8216`
+命令打印 `http://<NAS_IP>:5666/signin?...` 链接，在浏览器确认授权后把返回的
+授权码粘回命令提示即可。
 
-> 注意：e5 宿主机缺 `libatomic.so.1`（Node 26 需要），从 Docker overlay 里取后用
-> `LD_LIBRARY_PATH` 注入即可，无需 sudo。
+> 踩坑：`postinstall` 阶段写入 Skill 存在覆盖竞态，已改为安装后置步骤。
 
----
+## 附录 B：与官方安装脚本的关系
 
-## 八、下一步
+官方 `install.sh` 假设系统级 Python 与可写 `/usr/local`，与 fpk 沙箱模型不兼容。
+本项目按官方脚本的**阶段划分**重新实现，但不复用其脚本：
 
-1. **装到 NAS**：把 `hermes-desktop.fpk` 上传到飞牛 → 应用中心 → 手动安装
-2. **首次配置**：向导设用户名密码 → 桌面图标打开 → 按引导填模型 API Key
-3. **装官方 fnOS Skill**：让 Agent 获得 NAS 操控能力
-4. **与本机 Windows Desktop 并存**：两边连同一套 gateway 会话，任务队列互通
+1. `uv` 建 Python 3.14 venv
+2. 官方 `pm` 安装依赖（哈希锁定 + 自动剥离 `exclude-newer`）
+3. `pm` 不可用时回退到直接 `pip install`
+
+不使用官方 `hermes setup`（交互式，且在 fpk 里会写入错误的 HOME）与
+`hermes gateway install`（面向 systemd，而 fnOS 用自己的生命周期管理）。
 
 ---
 
 ## 附：核实来源
 
-- Hermes 源码：`NousResearch/hermes-agent`（`hermes_cli/webapp.py`、`hermes_cli/dashboard_auth/routes.py`、`plugins/dashboard_auth/basic/`、`gateway/webapp_listener.py`）
-- 官方文档：`website/docs/user-guide/desktop.md`（"Use the Desktop workspace from a browser"）、`user-guide/configuration.md`（webapp 段）、`reference/cli-commands.md`
-- fnOS 文档：`developer.fnnas.com/docs/core-concepts/framework/`、`/docs/cli/fnpack`、`/docs/core-concepts/environment-variables/`
-- fnpack：`static2.fnnas.com/fnpack/fnpack-1.2.3-windows-amd64`
-- 实机环境：飞牛 NAS <nas-ip>（Debian 12 bookworm / x86_64 / 23GB RAM / 30TB 可用）
-
----
-
-## 附录：自动化仓库（fnos-hermes-desktop）
-
-### 仓库结构
-
-```
-fnos-hermes-desktop/
-├── .github/workflows/
-│   ├── build.yml              # 定时/手动构建 + 发 Release
-│   └── sync.yml               # 每 6 小时检测上游变更，有变化才触发构建
-├── scripts/
-│   ├── build.sh               # 完整构建：克隆上游 → 构建渲染层 → 打包 fpk
-│   ├── smoke.sh               # 快速冒烟（约 1 分钟，不编译渲染层）
-│   └── push.sh                # 一键创建远程仓库 + 推送 + 触发 CI
-├── packaging/fpk/             # fpk 模板（渲染层构建时注入，不入库）
-├── docs/IMPLEMENTATION.md
-└── README.md / README.en.md
-```
-
-### 工作流设计
-
-| 工作流 | 触发 | 职责 |
-|---|---|---|
-| `sync.yml` | 每 6 小时 | 对比上游 commit，写入 `.upstream-sha`，有变化才 dispatch |
-| `build.yml` | 每日 03:17 / 手动 / 脚本变更 | 完整构建 → 上传 artifact → 发 Release（tag 已存在则只补传附件） |
-
-两者配合：`sync.yml` 反应快（6 小时），`build.yml` 兜底（每天必构建一次）。
-
-### 构建验证结果（e5 实测）
-
-从 `git archive` 导出的纯净快照开始，等价于 CI 的干净克隆：
-
-```
-[build] 上游最新版本 0.22.5
-[build] 渲染层就绪：1081 个文件，47M
-[build] 完成：dist/hermes-desktop.fpk
-[build]   版本   0.22.5（上游 a4994d4e）
-[build]   大小   16728259 字节
-build.sh exit=0
-```
-
-产物校验：22 个包内条目 / 1087 个渲染层文件 / manifest 字段正确。
-
-### 产物在 NAS 上的实机验证
-
-CI 构建出的 fpk 传到 NAS 后解包安装：
-
-```
-[1/5] 解包 → 1081 个渲染层文件
-[2/5] 脚本换行符 → ✓ 全部 LF
-[3/5] install_callback → ✓ hermes vgit.a4994d4 就绪，webapp 子命令可用
-[4/5] 启动 → gateway running，登录 200，GET / 200 <title>Hermes</title>
-```
-
-**完整闭环：源码 → 自动构建 → fpk → NAS 安装 → 登录可用。**
-
-### 版本号获取
-
-浅克隆拿不到 tag，改用 GitHub API：
-
-```bash
-curl -fsSL https://api.github.com/repos/NousResearch/hermes-agent/releases/latest \
-  | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\{0,1\}\([^"]*\)".*/\1/p'
-```
-
-### 换行符问题（必须处理）
-
-Windows 上开发、Linux 上执行，`cmd/` 下的脚本若被转成 CRLF 会直接
-`bad interpreter: /bin/bash^M`。已用 `.gitattributes` 强制：
-
-```gitattributes
-*.sh text eol=lf
-packaging/fpk/cmd/* text eol=lf
-```
-
-### 踩坑补充
-
-- `fnpack` 没有 `--version` 参数（Windows 版有，Linux 版无）→ 改为打印已知版本号
-- GitHub Actions 的 YAML 多行字符串里，notes 用 `--notes-file` 传文件更稳，
-  直接写多行标量会被 `:` 等字符干扰解析
-- 上游 `pyproject.toml` 的 `version = "0.0.0"`（构建期占位），
-  真实版本只在 git tag 上 → 必须走 API 或指定 tag ref
-
----
-
-## 附录二：内置飞牛官方 Skill
-
-### 决策结论
-
-**内置，但只内置能自动化的部分。** 三部分分别处理：
-
-| 组成 | 大小 | 处理 |
-|---|---|---|
-| 知识文档（SKILL.md + entries + reference） | ~500 KB | 内置 |
-| trim-cli 二进制（linux-x64 / arm64） | 7.3 / 6.2 MB | 内置（安装时按架构裁剪） |
-| OAuth 授权 | — | **不可内置**，必须用户交互 |
-
-### 实测依据
-
-在 NAS 上实测 trim-cli（官方 V2 版，含 2FA/RSA 支持）：
-
-```
-$ trim-cli --help
-Commands: app baidu-netdisk docker download file media photos
-          diagnostic-log logger login logout monitor network power
-          raw storage system user +ls +search +status
-
-$ trim-cli +status
-Error: failed to get system info from localhost:5666:
-       saved proxy session is required; run login first
-
-$ trim-cli login --no-open
-Open this URL to authorize trim-cli:
-http://localhost:5666/signin?client_id=YJNMPJUGA9&scope=trim.user.all ...
-         &code_challenge_method=S256&device_id=trim-cli-...
-```
-
-结论：
-- trim-cli **自动发现本机 fnOS**（localhost:5666），无需配置地址
-- 模块齐全，覆盖 NAS 全部管理能力
-- 论坛曾报告的「不兼容 2FA」问题在 V2 版已修复（本机 skill 的 oauth.md 明确写了 2FA/TOTP 支持）
-
-### 落点
-
-上游源码依据（`hermes_constants.py`）：
-
-```python
-def get_skills_dir() -> Path:
-    """Return the path to the skills directory under HERMES_HOME."""
-    return get_hermes_home() / "skills"
-```
-
-本应用 `HERMES_HOME = TRIM_PKGVAR`，故 Skill 落在应用数据目录，
-卸载保留、重装免重新授权。
-
-### 踩坑：postinstall 覆盖竞态
-
-**现象**：首次安装后 `hermes skills list` 只有 builtin，看不到 fnos。
-
-**根因**：editable 安装的 `postinstall` 钩子会在安装结束后铺开 Hermes 内置技能
-（`skills/apple`、`skills/creative` 等 39 个），**覆盖**刚部署到
-`HERMES_HOME/skills` 的 `fnos-trim`。
-
-**修复（三重保险）**：
-
-1. `install_callback` 增加 `verify_fnos_skill`：部署后校验 `SKILL.md` + `bin/` +
-   `scripts/trim-cli` 是否在位，不在则重新部署（最多 3 次，每次间隔 2s）
-2. `cmd/main` 增加 `heal_fnos_skill`：启动时若发现 Skill 缺失，从只读的安装目录
-   （`TRIM_APPDEST/skills/fnos-trim`）补回
-3. `start_process` 在启动前调用 `heal_fnos_skill`
-
-**实测**（模拟覆盖后）：
-
-```
-[3] 校验并自愈 → 校验未通过 → 重新部署 → 校验通过 → ✓ 已恢复
-[4] 启动自愈   → 飞牛 Skill 缺失，从安装目录补回 → ✓ 启动自愈生效
-[5] Hermes 技能发现 → fnos │ local │ local │ enabled
-                    0 hub-installed, 39 builtin, 1 local — 40 enabled
-```
-
-### 内置后体积
-
-| 项 | 大小 |
+| 结论 | 依据 |
 |---|---|
-| 渲染层（webapp） | 47 MB / 1081 文件 |
-| 飞牛 Skill | 14 MB / 40 文件（含两个架构二进制） |
-| 打包后 fpk | 22.9 MB |
-
-安装时按架构裁剪二进制，实际占用约 7.3 MB（x86_64）。
-
-
----
-
-## 附录三：与官方安装脚本的关系
-
-### 官网的安装方式（Linux/macOS 与 Windows 不同）
-| 平台 | 命令 |
-|---|---|
-| macOS / Linux | `curl -fsSL https://hermes-agent.nousresearch.com/install.sh \| bash` |
-| Windows | `irm https://hermes-agent.nousresearch.com/install.ps1 \| iex` |
-
-官方 install.sh 共 1302 行，**只支持 Unix** —— 第 444 行明确：
-`fail "unsupported platform: $(uname -s). On Windows use install.ps1."`
-Windows 另有独立的 PowerShell 脚本，桌面版另有 Hermes-Setup.exe / .dmg 安装包。
-
-### install.sh 的阶段划分
-```
-prerequisites → repository → venv → python-deps → config
-              → products → setup → gateway → complete
-```
-- `--stage NAME` 可单独跑某一阶段
-- `--non-interactive` 跳过需要输入的阶段
-- `--include-desktop` 额外构建桌面应用（Electron）
-
-### 本 fpk 与官方脚本的关系
-fpk 走的是**另一种形态**：不执行 install.sh，而是自己实现 NAS 上的安装流程，
-但**依赖安装改用官方的 pm**（此前是手写 `uv pip install -e ".[all]"`）。
-
-关键改动原因 —— 上游 pm/AGENTS.md 明确写着：
-
-> The `[tool.uv] exclude-newer = "3 days"` release-age check covers **Hermes's own
-> dependencies only** ... It runs when Hermes LOCKS (`hermes pm lock`, CI's lock check),
-> **never on users' machines**: every generated workspace drops the cutoff
-> (`pm/workspace.py::_without_release_age`), so a mirror without upload times cannot
-> break an install (#135589).
-
-也就是说：本项目此前遇到的「国内镜像缺 upload-time → 依赖被全部过滤」
-（上游 issue #135589）**官方已在 pm 里修掉** —— pm 会主动剥离 exclude-newer。
-本 fpk 之前自己写 `--exclude-newer 2027-01-01` 来绕过，属于过时做法。
-
-### 现在采用的安装流程
-```bash
-# 1. uv 建 Python 3.14 venv
-uv venv --python 3.14 ${VENV_DIR}
-
-# 2. 官方 pm 安装依赖（哈希锁定 + 自动剥离 exclude-newer）
-cd ${SRC_DIR} && ${VENV_DIR}/bin/python3 -m pm.cli install \
-    --without chromium --without cua-driver
-
-# 3. 回退（pm 不可用时）
-uv pip install --python ${VENV_DIR}/bin/python3 \
-    --exclude-newer 2027-01-01 -e ".[web]"
-```
-
-NAS 上不需要浏览器自动化与计算机视觉驱动，用 `--without chromium --without cua-driver`
-跳过，可省下数百 MB 与不少安装时间。
-
-实测（NAS）：
-```
-✓ pm.cli 导入成功
-✓ exclude-newer 剥离生效: True
-✓ pm install --help 确认参数：--without chromium / --without cua-driver
-```
-
-### 为什么不用官方的 setup 与 gateway install
-- `hermes setup` 是交互式向导（需 TTY）；fpk 的安装向导已收集好配置，
-  直接写 config.yaml 更可控（要精确设定 webapp.host/port 与 basic_auth）
-- `hermes gateway install` 装的是 systemd 用户服务；fnOS 用自己的
-  应用生命周期管理（install_callback / cmd/main）管理进程
+| Webapp 与 Dashboard 共用传输层 | `src/hermes_cli/webapp.py` 模块文档 |
+| 非回环绑定强制认证 | `src/hermes_cli/web_server_boundary.py: should_require_auth()` |
+| 白名单只管 Host 校验 | 同文件 `_is_accepted_host()` |
+| 认证要求 scrypt 哈希 | 运行时日志提示 + `plugins/dashboard_auth/basic.py` |
+| 子路径基准变量 | 上游注入的 `window.__HERMES_BASE_PATH__` |
+| 官方应用入口惯例 | `conversun/fnos-apps` 全量 `ui/config` 抽样 |
