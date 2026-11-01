@@ -351,6 +351,12 @@ fetch_source() {
 
 # ── 安装（关键：Python 3.14 + 官方源 + 放宽 exclude-newer） ──────────────
 install_hermes() {
+    # 预置缺失的运行时库（fnOS 没有 libatomic.so.1，pm 装 node 会失败）
+    if [ -f "$(dirname "$0")/libs.sh" ]; then
+        . "$(dirname "$0")/libs.sh"
+        ensure_libatomic || true
+    fi
+
     # HOME 必须指向应用自己的 home 目录。
     # fnOS 注入的 HOME 是 /home/<appname>，那个路径并不存在（真实目录是
     # /vol1/@apphome/<appname>），pm 会因此报
