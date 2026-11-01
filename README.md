@@ -188,3 +188,66 @@ OUTPUT_DIR=/path/out   # 指定输出目录
 
 本仓库（fpk 打包与自动化流水线部分）为社区贡献的开源项目。
 上游 Hermes Agent 遵循其自身许可（MIT）。
+
+---
+
+## 在 Gitea 上运行 CI
+
+本仓库的工作流**同时兼容 GitHub Actions 与 Gitea Actions**（已在你自建的
+Gitea `<gitea-host>` 上验证被正确识别）。
+
+### 已做的兼容处理
+
+| 差异点 | 处理方式 |
+|---|---|
+| Release API | 抽到 `scripts/publish_release.py`，按 `GITHUB_API_URL` 自动适配（两平台路径一致） |
+| `actions/github-script`（GitHub 专属） | 移除，改用 curl 调 Gitea 的 dispatch API |
+| `actions/upload-artifact@v4` | 降级到 `v3`（Gitea 只支持到 v3，GitHub 同样接受） |
+| `actions/setup-node` | 改为直接下载 Node 26 二进制，避免 action 源差异与版本清单滞后 |
+| 触发方式 | Gitea 走 dispatch API，GitHub 走 `gh` CLI |
+
+### 启用 Gitea Actions
+
+Gitea 需要 **runner** 才能执行工作流。步骤：
+
+1. 在 Gitea 打开仓库 → **Settings** → **Actions** → **Runners** → **New runner**
+2. 选择 **docker** 或 **host** 模式，复制注册命令
+3. 在你的构建机上执行（用 `act_runner` 官方镜像）：
+
+```bash
+docker run -d \
+  --name gitea-runner \
+  --restart always \
+  -e GITEA_INSTANCE_URL="https://<gitea-host>" \
+  -e GITEA_RUNNER_REGISTRATION_TOKEN="<上一步复制的 token>" \
+  -e GITEA_RUNNER_NAME="fnos-builder" \
+  -e GITEA_RUNNER_LABELS="ubuntu-latest:docker://node:26-bookworm" \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  gitea/act_runner:latest
+```
+
+> 用 `node:26-bookworm` 作为任务镜像：官方 build 脚本要求 Node ≥ 26。
+
+4. 之后仓库的 Actions 页面就能看到两个工作流：
+   - **同步上游并构建**（每日 03:17 + 手动）
+   - **检查上游更新**（每 6 小时，有变化才触发构建）
+
+### 需要配置的 Secret
+
+仓库 **Settings** → **Actions** → **Secrets**：
+
+| 名称 | 用途 |
+|---|---|
+| `GITEA_TOKEN` | 发布 Release 用。在 Gitea **Settings** → **Applications** 生成，勾选 `write:repository` |
+
+未配置 `GITEA_TOKEN` 时，构建仍会正常完成，只是跳过 Release 发布步骤
+（产物可从 Actions 的 artifact 下载）。
+
+### 手动触发
+
+```bash
+curl -H "Authorization: token <GITEA_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -X POST "https://<gitea-host>/api/v1/repos/<owner>/<repo>/actions/workflows/build.yml/dispatches" \
+  -d '{"ref":"main"}'
+```
