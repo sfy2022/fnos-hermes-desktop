@@ -300,6 +300,47 @@ class ProxyHandler(socketserver.BaseRequestHandler):
                        [("Content-Type", "text/plain; charset=utf-8")], body)
 
     # ── 转发 ──────────────────────────────────────────────────────────
+    def _rewrite_location(self, headers: list[tuple[str, str]]) -> None:
+        """重写上游 3xx 的 Location 头，把相对路径挂到网关前缀下。
+
+        这是桌面内嵌能否工作的关键：应用挂在 /app/hermes-desktop 子路径，
+        而上游返回的 `location: /login?next=%2F` 是站点根相对路径。
+        浏览器会把它解析成 http://<host>:5666/login —— 那是 fnOS 自己的
+        登录页，而不是应用的登录页，表现为「一点桌面图标就跳到飞牛登录页」。
+
+        同时剥掉 Location 里的 token 参数：它是上游自己的一次性凭证，
+        不应泄漏到地址栏。
+        """
+        prefix = self.server.prefix
+        if not prefix:
+            return
+        for i, (name, value) in enumerate(headers):
+            if name.lower() != "location":
+                continue
+            loc = value.strip()
+            if not loc:
+                continue
+
+            # 拆出 query 与 fragment
+            base, sep, query = loc.partition("?")
+            frag = ""
+            if "#" in base:
+                base, _, frag = base.partition("#")
+                frag = "#" + frag
+
+            # 站点根相对路径 → 加上网关前缀
+            if base.startswith("/") and not base.startswith("//"):
+                base = prefix + base
+
+            # 去掉上游的一次性 token 参数
+            if query:
+                params = [p for p in query.split("&")
+                          if p and not p.lower().startswith("token=")]
+                query = "&".join(params)
+
+            rebuilt = base + (("?" + query) if query else "") + frag
+            headers[i] = (name, rebuilt)
+
     def _forward(self, method: str, path: str, version: str,
                  headers: dict[str, str], body: bytes) -> None:
         target = self._strip_prefix(path)
@@ -329,6 +370,7 @@ class ProxyHandler(socketserver.BaseRequestHandler):
                             if k.lower() not in ("transfer-encoding", "content-length",
                                                 "connection", "keep-alive")]
             self._rewrite_set_cookie(resp_headers)
+            self._rewrite_location(resp_headers)
 
             # HTML/CSS 内容改写：补上网关前缀，让子路径下的资源能正确加载
             ctype = resp.getheader("Content-Type", "")
