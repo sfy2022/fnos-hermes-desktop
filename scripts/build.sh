@@ -132,6 +132,53 @@ fi
 if [ ! -f "${DIST_WEBAPP}/index.html" ]; then
   die "渲染层构建失败：未生成 ${DIST_WEBAPP}/index.html"
 fi
+
+# ── 2b. 注入默认语言 ────────────────────────────────────────────────────
+# 上游 Webapp 的 i18n 只从浏览器 localStorage 的 "hermes-locale" 读取，
+# 不读 config.yaml 的 display.language（那是给 CLI/TUI 用的）。
+# 所以要在渲染层加载前写入 localStorage，才能让界面默认中文。
+# 注意：只在用户尚未手动选择过时写入，不覆盖用户的选择。
+DISPLAY_LANGUAGE="${DISPLAY_LANGUAGE:-zh}"
+if [ -n "${DISPLAY_LANGUAGE}" ] && [ "${DISPLAY_LANGUAGE}" != "auto" ]; then
+  inject_locale() {
+    local html="${DIST_WEBAPP}/index.html"
+    local marker="hermes-locale-boot"
+    # 已注入过则跳过（幂等）
+    if grep -q "${marker}" "${html}" 2>/dev/null; then
+      log "默认语言已注入过，跳过"
+      return 0
+    fi
+    # 插到主 bundle 的 <script type="module"> 之前，确保首屏就是目标语言
+    python3 - "${html}" "${DISPLAY_LANGUAGE}" "${marker}" <<'PYEOF'
+import sys, re
+path, lang, marker = sys.argv[1], sys.argv[2], sys.argv[3]
+html = open(path, encoding='utf-8').read()
+if marker in html:
+    sys.exit(0)
+snippet = (
+    f'    <!-- {marker}: 默认界面语言 -->\n'
+    f'    <script>\n'
+    f'      try {{\n'
+    f'        if (!localStorage.getItem("hermes-locale")) {{\n'
+    f'          localStorage.setItem("hermes-locale", "{lang}")\n'
+    f'        }}\n'
+    f'      }} catch {{ /* localStorage 不可用时忽略 */ }}\n'
+    f'    </script>\n'
+)
+# 优先插在第一个 <script type="module" 之前；没有则插到 </head> 前
+m = re.search(r'\s*<script type="module"', html)
+if m:
+    html = html[:m.start()] + "\n" + snippet + html[m.start():]
+else:
+    html = html.replace("</head>", snippet + "  </head>", 1)
+open(path, "w", encoding="utf-8", newline="\n").write(html)
+print(f"[build] 已注入默认语言 {lang}")
+PYEOF
+  }
+  inject_locale || die "注入默认语言失败"
+  log "默认界面语言：${DISPLAY_LANGUAGE}"
+fi
+
 BUNDLE_FILES="$(find "${DIST_WEBAPP}" -type f | wc -l | tr -d ' ')"
 log "渲染层就绪：${BUNDLE_FILES} 个文件，$(du -sh "${DIST_WEBAPP}" | cut -f1)"
 
