@@ -118,6 +118,36 @@ else
   fi
 fi
 
+# ── 1.5 注入 bundled 桌面插件 ───────────────────────────────────────────
+# 浏览器的插件加载器只认**构建时打包**的插件：
+#   src/apps/desktop/src/plugins/<id>/plugin.{js,tsx}  （vite glob）
+# 磁盘上的 runtime door（<hermes home>/desktop-plugins/<id>/plugin.js）
+# 依赖 window.hermesDesktop —— Electron 专属 IPC，浏览器里是 undefined，
+# 所以纯 webapp 环境下磁盘插件一个都不会加载。
+# 因此这里在构建前把随包插件放进源码树的对应位置，让它被 vite 打进产物。
+inject_bundled_plugins() {
+    local src_plugins="${REPO_ROOT}/packaging/fpk/app/plugins"
+    local dst_plugins="${SRC_DIR}/apps/desktop/src/plugins"
+    [ -d "${src_plugins}" ] || return 0
+    mkdir -p "${dst_plugins}" 2>/dev/null || true
+
+    local dir name
+    for dir in "${src_plugins}"/*/; do
+        [ -d "${dir}" ] || continue
+        name="$(basename "${dir}")"
+        # desktop/plugin.js 是 runtime door 形态；bundled 需要平铺的 plugin.js
+        if [ -f "${dir}desktop/plugin.js" ]; then
+            mkdir -p "${dst_plugins}/${name}" 2>/dev/null || true
+            cp -f "${dir}desktop/plugin.js" "${dst_plugins}/${name}/plugin.js"
+            log "注入 bundled 插件：${name}"
+        fi
+    done
+}
+
+if [ "${SKIP_BUNDLE:-0}" != "1" ]; then
+    inject_bundled_plugins
+fi
+
 # ── 2. 构建 Webapp 渲染层 ───────────────────────────────────────────────
 if [ "${SKIP_BUNDLE:-0}" = "1" ] && [ -f "${DIST_WEBAPP}/index.html" ]; then
   log "跳过渲染层构建（复用已有产物）"
