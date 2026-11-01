@@ -516,6 +516,9 @@ class ProxyHandler(socketserver.BaseRequestHandler):
         控制 socket 只接受同 OS 用户，所以由本层（与应用同用户）代取链接，
         再用相对路径重定向浏览器过去，保持同源。
         """
+        if not getattr(self.server, "launch_redirect", False):
+            return False
+
         clean = path.split("?")[0]
         prefix = getattr(self.server, "prefix", "") or ""
         stripped = clean[len(prefix):] if prefix and clean.startswith(prefix) else clean
@@ -603,12 +606,14 @@ class ProxyUnixServer(ThreadingUnixHTTPServer):
     upstream_port: int
     socket_path: str
     hermes_home: str = ""
+    launch_redirect: bool = False
 
 
 def serve(socket_path: str, upstream: tuple[str, int], prefix: str,
-          hermes_home: str = "") -> int:
+          hermes_home: str = "", launch_redirect: bool = False) -> int:
     server = ProxyUnixServer(socket_path, ProxyHandler, prefix, upstream)
     server.hermes_home = hermes_home
+    server.launch_redirect = launch_redirect
     log(f"监听 {socket_path}")
     log(f"上游 {upstream[0]}:{upstream[1]}  前缀 {prefix or '(无)'}")
     try:
@@ -628,6 +633,9 @@ def main() -> int:
     ap.add_argument("--prefix", default="", help="要剥离的路径前缀")
     ap.add_argument("--hermes-home", default="",
                     help="Hermes 的 home 目录（含 gateway.sock），用于申请一次性启动链接")
+    ap.add_argument("--enable-launch-redirect", action="store_true",
+                    help="启用首页→一次性启动链接的重定向（仅在 webapp 需要登录时才有用；"
+                         "绑回环、免登录时上游直接返回主界面，不该再重定向）")
     ap.add_argument("--enable-autostart", action="store_true",
                     help="允许适配层在上游未就绪时拉起它（默认关闭，"
                          "启动由 cmd/main 负责，避免与 fnOS 抢 host）")
@@ -667,14 +675,14 @@ def main() -> int:
         tcp_thread = threading.Thread(
             target=_serve_tcp,
             args=(tcp_host, int(tcp_port), (host, int(port)), args.prefix,
-                  args.hermes_home),
+                  args.hermes_home, args.enable_launch_redirect),
             daemon=True)
         tcp_thread.start()
         log(f"额外 TCP 监听 {tcp_host}:{tcp_port}（浏览器直连，免登录）")
 
     try:
         return serve(args.socket, (host, int(port)), args.prefix,
-                     args.hermes_home)
+                     args.hermes_home, args.enable_launch_redirect)
     finally:
         pass
 
@@ -889,7 +897,7 @@ def _rewrite_response_body(raw: bytes, path: str, prefix: str) -> bytes:
 
 
 def _serve_tcp(host: str, port: int, upstream: tuple[str, int], prefix: str,
-               hermes_home: str = "") -> None:
+               hermes_home: str = "", launch_redirect: bool = False) -> None:
     """在 TCP 上提供同样的 HTTP 转发（供浏览器直接访问）。
 
     与 Unix Socket 通道的差别只有一处：Host 头固定为回环地址，
@@ -951,8 +959,9 @@ def _serve_tcp(host: str, port: int, upstream: tuple[str, int], prefix: str,
 
                 # 与 socket 通道一致：首页请求改写成一次性启动链接
                 # 已配对（带 cookie）就直接放行，避免死循环
-                if stripped == "/" and PAIRED_COOKIE not in (
-                        self.headers.get("Cookie") or ""):
+                if (launch_redirect and stripped == "/"
+                        and PAIRED_COOKIE not in (
+                            self.headers.get("Cookie") or "")):
                     link = _launch_path(hermes_home)
                     if link and link.rstrip("/") not in ("", "/"):
                         target = f"{prefix}{link}"
