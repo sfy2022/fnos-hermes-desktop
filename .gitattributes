@@ -22,3 +22,10 @@ packaging/fpk/app/ui/config text eol=lf
 
 # 二进制
 *.PNG binary
+
+# 兜底：packaging 下所有非二进制文本统一 LF
+packaging/** text eol=lf
+# 但明确排除二进制
+packaging/fpk/app/skills/fnos-trim/bin/* binary
+packaging/fpk/ICON.PNG binary
+packaging/fpk/ICON_256.PNG binary
