@@ -24,9 +24,14 @@ for f in manifest cmd/main cmd/install_callback cmd/install_init \
 done
 log "    模板完整"
 
-log "2/5 校验 shell 脚本语法"
+log "2/5 校验脚本语法"
 for f in "${REPO_ROOT}"/packaging/fpk/cmd/* "${REPO_ROOT}"/packaging/fpk/app/skills/fnos-trim/scripts/trim-cli; do
-  bash -n "${f}" || die "语法错误：${f}"
+  [ -f "${f}" ] || continue
+  # 按扩展名分流：.py 用 Python 解释器检查，其余按 shell 检查
+  case "${f}" in
+    *.py) PYTHONPYCACHEPREFIX=/tmp/.smoke-pycache python3 -m py_compile "${f}" 2>/dev/null || die "Python 语法错误：${f}" ;;
+    *)   bash -n "${f}" || die "shell 语法错误：${f}" ;;
+  esac
 done
 log "    全部通过"
 
