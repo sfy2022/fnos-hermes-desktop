@@ -3,15 +3,11 @@
         "hermes-desktop.Application": {
             "title": "Hermes Desktop",
             "icon": "images/icon_{0}.png",
-            "type": "iframe",
-            "protocol": "",
-            "gatewayPrefix": "/app/hermes-desktop",
-            "gatewaySocket": "app.sock",
-            "url": "/app/hermes-desktop",
-            "allUsers": true,
-            "control": {
-                "accessPerm": "editable"
-            }
+            "type": "url",
+            "protocol": "http",
+            "port": "9120",
+            "url": "/",
+            "allUsers": true
         }
     }
 }

@@ -1,6 +1,6 @@
 [
     {
-        "stepTitle": "安装说明",
+        "stepTitle": "访问账号",
         "items": [
             {
                 "type": "tips",
@@ -8,7 +8,32 @@
             },
             {
                 "type": "tips",
-                "helpText": "<br><b>无需额外登录</b><br>本应用通过飞牛统一网关接入：桌面图标点击后在飞牛桌面窗口内打开，复用飞牛自身的登录态即可。<br>Hermes 服务只监听本机回环地址（<code>127.0.0.1</code>），不向局域网暴露端口，因此不再需要单独的访问密码。"
+                "helpText": "<br>本应用在局域网内监听 <code>9120</code> 端口，<b>需要设置访问密码</b>以防他人未授权使用 Agent（登录后的用户可以执行命令、读写文件）。<br>若留空，系统会生成随机密码，可在应用数据目录的 <code>access-info.txt</code> 中查看。"
+            },
+            {
+                "type": "text",
+                "field": "wizard_web_user",
+                "label": "访问用户名",
+                "initValue": "admin",
+                "rules": [
+                    {
+                        "required": true,
+                        "message": "请填写访问用户名"
+                    }
+                ]
+            },
+            {
+                "type": "password",
+                "field": "wizard_web_pass",
+                "label": "访问密码（留空则随机生成）",
+                "initValue": "",
+                "placeholder": "建议至少 12 位，含字母与数字",
+                "rules": [
+                    {
+                        "required": false,
+                        "message": "留空将自动生成随机强密码"
+                    }
+                ]
             },
             {
                 "type": "tips",

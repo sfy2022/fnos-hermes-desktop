@@ -185,7 +185,7 @@ log "渲染层就绪：${BUNDLE_FILES} 个文件，$(du -sh "${DIST_WEBAPP}" | c
 # ── 2c. 校验运行时脚本完整且语法正确 ────────────────────────────────────
 # packaging/fpk/cmd/ 下的 .py 是随包分发的运行时脚本，唯一来源就在这里
 # （不再与 scripts/ 放副本，避免「改了源码没同步」这类问题）。
-for pair in "gateway_proxy.py" "fnos_bridge.py" "pause_gateway.py"; do
+for pair in "pause_gateway.py"; do
     dist_file="${REPO_ROOT}/packaging/fpk/cmd/${pair}"
     [ -f "${dist_file}" ] || die "缺少运行时脚本：${dist_file}"
     PYTHONPYCACHEPREFIX=/tmp/.build-pycache python3 -m py_compile "${dist_file}" \

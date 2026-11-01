@@ -105,6 +105,13 @@ sync_ui_port() {
 # 向导变量（无 TRIM_ 前缀）在安装时以环境变量形式注入
 apply_wizard_settings() {
     local cfg="${DATA_DIR}/config.yaml"
+    local user="${wizard_web_user:-admin}"
+    local pass="${wizard_web_pass:-}"
+
+    if [ -z "${pass}" ]; then
+        pass="$(gen_password)"
+        log_msg "未设置密码，已生成随机密码"
+    fi
 
     mkdir -p "${DATA_DIR}" 2>/dev/null || true
     [ -f "${cfg}" ] || printf '# Hermes Agent 配置\n' > "${cfg}"
@@ -125,9 +132,14 @@ apply_wizard_settings() {
 # ── 飞牛版 Hermes Desktop（由安装向导生成） ─────────────
 webapp:
   enabled: true
-  host: 127.0.0.1
+  host: 0.0.0.0
   port: ${SERVICE_PORT}
   public_url: ""
+
+dashboard:
+  basic_auth:
+    username: ${user}
+    password: "${pass}"
 EOF
         chmod 600 "${cfg}" 2>/dev/null || true
         log_msg "已写入 webapp 配置（host=127.0.0.1 port=${SERVICE_PORT}）"
@@ -141,13 +153,6 @@ EOF
             log_msg "config.yaml 端口已从 ${cfg_port} 更新为 ${SERVICE_PORT}"
         fi
 
-        # host：必须纠正为回环地址。旧版本写的是 0.0.0.0，会触发上游的
-        # 认证 gate，界面上多出登录页；也把服务暴露在局域网上。
-        if grep -qE "^[[:space:]]*host:[[:space:]]*0\.0\.0\.0" "${cfg}" 2>/dev/null; then
-            sed -i "s/^\([[:space:]]*host:[[:space:]]*\)0\.0\.0\.0/\1127.0.0.1/" "${cfg}" 2>/dev/null || true
-            log_msg "config.yaml 的 webapp.host 已从 0.0.0.0 纠正为 127.0.0.1（回环监听，无需登录）"
-        fi
-
         # public_url：非回环的 public_url 也会触发 gate
         if grep -qE '^[[:space:]]*public_url:[[:space:]]*"?[^"[:space:]]' "${cfg}" 2>/dev/null; then
             sed -i "s/^\([[:space:]]*public_url:[[:space:]]*\).*/\1\"\"/" "${cfg}" 2>/dev/null || true
@@ -155,47 +160,20 @@ EOF
         fi
     fi
 
-    # 清理遗留的 dashboard.basic_auth。
-    # 它是 Dashboard（多用户 web 控制台）的认证机制，与 Webapp 形态无关；
-    # 留着会让用户以为需要账号密码，也会在配置里留下明文密码。
-    if grep -q "^[[:space:]]*basic_auth:" "${cfg}" 2>/dev/null; then
-        python3 - "${cfg}" <<'PYEOF' 2>/dev/null || true
-import re, sys
-path = sys.argv[1]
-try:
-    lines = open(path, encoding="utf-8").read().splitlines(keepends=True)
-    out = []
-    skip = False
-    for line in lines:
-        if skip:
-            # 比 basic_auth 缩进更深的行属于同一块，一并删除
-            if line.strip() and (len(line) - len(line.lstrip())) > 2:
-                continue
-            skip = False
-        if re.match(r"^[ \t]*basic_auth:[ \t]*$", line.rstrip("\n")):
-            skip = True
-            continue
-        out.append(line)
-    open(path, "w", encoding="utf-8", newline="\n").write("".join(out))
-except Exception:
-    pass
-PYEOF
-        log_msg "已清理遗留的 dashboard.basic_auth（Webapp 不需要登录）"
-    fi
-
     # 把访问信息单独存一份，便于用户查阅
     local info="${DATA_DIR}/access-info.txt"
     cat > "${info}" <<EOF
 Hermes Desktop（飞牛版）访问信息
 ================================
-入口:     飞牛桌面上的「Hermes Desktop」图标（点击后在内嵌窗口打开）
-免登录:   是。复用飞牛自身的登录态，无需额外账号密码。
+地址:     http://<本机IP>:${SERVICE_PORT}
+用户名:   ${user}
+密码:     ${pass}
 
 说明：
-- Hermes 服务只监听本机回环地址 127.0.0.1:${SERVICE_PORT}，不对局域网暴露端口。
-- 对外访问经由飞牛统一网关（${GATEWAY_PREFIX:-/app/hermes-desktop}），
-  鉴权由飞牛负责。
-- 如需修改监听配置，编辑 ${cfg} 中的 webapp 段，改后需重启应用。
+- 飞牛桌面上的「Hermes Desktop」图标点击后会在浏览器打开上面的地址。
+- 上游对非回环绑定强制启用认证（防止局域网内未授权访问），
+  因此需要输入上面这组账号密码。
+- 密码可通过编辑 ${cfg} 中的 dashboard.basic_auth 修改，改后需重启应用。
 EOF
     chmod 600 "${info}" 2>/dev/null || true
     log_msg "访问信息已写入 ${info}"
@@ -451,17 +429,6 @@ install_hermes() {
     if ! "${VENV_DIR}/bin/hermes" webapp --help >/dev/null 2>&1; then
         toast_err "安装的版本缺少 webapp 子命令，无法提供 Desktop 界面。"
         return 1
-    fi
-
-    # 把网关适配层脚本部署到数据目录。
-    # 放在数据目录（应用用户可写）而不是 cmd/（root 只读），
-    # 这样后续排障可以直接替换脚本、不必重装应用。
-    local proxy_src="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
-    if [ -f "${proxy_src}/gateway_proxy.py" ]; then
-        cp -f "${proxy_src}/gateway_proxy.py" "${DATA_DIR}/gateway_proxy.py" 2>/dev/null || true
-        cp -f "${proxy_src}/fnos_bridge.py" "${DATA_DIR}/fnos_bridge.py" 2>/dev/null || true
-        chmod +x "${DATA_DIR}/gateway_proxy.py" 2>/dev/null || true
-        log_msg "网关适配层脚本已部署到 ${DATA_DIR}"
     fi
 
     log_msg "安装成功：$("${VENV_DIR}/bin/hermes" --version 2>&1 | head -n 1)"

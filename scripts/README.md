@@ -15,13 +15,19 @@
 | `install_callback` | 安装后：写配置、装依赖、部署网关脚本 |
 | `uninstall_init` / `uninstall_callback` | 卸载：停进程、归档数据、按选择清理 |
 | `upgrade_callback` | 升级后处理 |
-| `gateway_proxy.py` | fnOS 统一网关适配层（HTTP over Unix Socket） |
-| `fnos_bridge.py` | 注入页面的前缀桥接脚本（把绝对路径 API 改写成带前缀） |
 | `pause_gateway.py` | 通过 gateway 的 Unix Socket 做优雅停机 |
 
 > 早期版本曾在 `scripts/` 下放这些运行时脚本的副本，靠打包前比对保证一致。
 > 踩过一次「改了源码没同步副本 → 包里还是旧版」的坑，现已改为单一来源：
 > 运行时脚本只放在 `packaging/fpk/cmd/`，构建时直接取用并做语法校验。
+
+### 关于访问方式
+桌面图标走**直连**：`type: url` + `protocol: http` + `port: 9120`，
+点击后在浏览器打开 `http://<本机IP>:9120/`，与官方 Linux 版在浏览器里的用法一致。
+
+早期版本试过 fnOS 统一网关模式（`gatewayPrefix` + Unix Socket + 页面注入前缀
+桥接脚本），那套是为复用 fnOS 登录态设计的，多用户场景才需要；单人 NAS 应用
+用不上，已整体移除。
 
 # 冒烟自检
 

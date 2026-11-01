@@ -58,14 +58,10 @@ stop_app_processes() {
     # 2) 兜底：按本应用路径匹配
     pkill -TERM -f "${TRIM_PKGVAR}/venv/bin" 2>/dev/null || true
     pkill -TERM -f "${TRIM_PKGVAR}.*gateway" 2>/dev/null || true
-    pkill -TERM -f "gateway_proxy.py" 2>/dev/null || true
     sleep 2
     pkill -KILL -f "${TRIM_PKGVAR}/venv/bin" 2>/dev/null || true
     pkill -KILL -f "${TRIM_PKGVAR}.*gateway" 2>/dev/null || true
-    pkill -KILL -f "gateway_proxy.py" 2>/dev/null || true
 
-    # 3) 网关 socket：应用目录会被 fnOS 删除，这里确保不留悬空 socket
-    rm -f "${TRIM_APPDEST}/app.sock" 2>/dev/null || true
 }
 
 # 把要删的数据先归档一份到存储卷根目录。
