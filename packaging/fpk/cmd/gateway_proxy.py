@@ -592,6 +592,9 @@ def main() -> int:
     ap.add_argument("--prefix", default="", help="要剥离的路径前缀")
     ap.add_argument("--hermes-home", default="",
                     help="Hermes 的 home 目录（含 gateway.sock），用于申请一次性启动链接")
+    ap.add_argument("--enable-autostart", action="store_true",
+                    help="允许适配层在上游未就绪时拉起它（默认关闭，"
+                         "启动由 cmd/main 负责，避免与 fnOS 抢 host）")
     ap.add_argument("--autostart", default="",
                     help="上游未就绪时用这条命令拉起它（如 hermes gateway run）")
     ap.add_argument("--autostart-cwd", default="",
@@ -608,9 +611,16 @@ def main() -> int:
         print(f"[gateway-proxy] {die}", file=sys.stderr)
         return 1
 
-    if args.autostart:
+    # autostart 默认关闭。
+    # 它会在「上游暂时没监听」时自己拉一个 Hermes —— 但 fnOS 启动应用时
+    # 本来就在启动 Hermes，两者会抢同一个 host 与 profile 锁，于是
+    # 新实例被拒（"A gateway already owns this host..."），表现为
+    # 应用「无法启用」。启动由 cmd/main 负责，适配层不该越权。
+    if args.autostart and args.enable_autostart:
         _ensure_upstream(args.autostart, args.autostart_cwd,
                          host, int(port))
+    elif args.autostart:
+        log("已忽略 autostart（启动由 cmd/main 负责，避免与 fnOS 抢 host）")
 
     tcp_thread = None
     if args.tcp_listen:

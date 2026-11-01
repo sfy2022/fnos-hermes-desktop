@@ -232,8 +232,6 @@ start_gateway_proxy() {
         --upstream "127.0.0.1:${SERVICE_PORT}" \
         --prefix "${GATEWAY_PREFIX}" \
         --tcp-listen "0.0.0.0:${GATEWAY_TCP_PORT}" \
-        --autostart "${VENV_DIR}/bin/hermes gateway run --replace" \
-        --autostart-cwd "${DATA_DIR}" \
         --hermes-home "${DATA_DIR}" \
         >> "${DATA_DIR}/gateway-proxy.log" 2>&1 &
 
