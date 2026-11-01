@@ -343,6 +343,79 @@ verify_webapp() {
     return 0
 }
 
+# ── 部署内置飞牛 Skill ──────────────────────────────────────────────────
+# Hermes 从 HERMES_HOME/skills 加载技能（上游 get_skills_dir()）。
+# 本应用的 HERMES_HOME 即 TRIM_PKGVAR，所以装到 ${TRIM_PKGVAR}/skills/。
+deploy_fnos_skill() {
+    local src="${TRIM_APPDEST}/skills/fnos-trim"
+    local dst="${DATA_DIR}/skills/fnos-trim"
+
+    if [ ! -d "${src}" ]; then
+        log_msg "未随包内置飞牛 Skill，跳过（可在设置里手动安装）"
+        return 0
+    fi
+
+    mkdir -p "${DATA_DIR}/skills" 2>/dev/null || true
+    rm -rf "${dst}"
+    if ! cp -r "${src}" "${dst}" 2>/dev/null; then
+        log_msg "复制飞牛 Skill 失败，跳过"
+        return 0
+    fi
+
+    # 只保留与本机架构匹配的二进制
+    local arch target
+    arch="$(uname -m)"
+    case "${arch}" in
+    x86_64)  target="trim-cli-linux-x64" ;;
+    aarch64) target="trim-cli-linux-arm64" ;;
+    armv7l)  target="" ;;
+    *)       target="" ;;
+    esac
+
+    local bin="${dst}/bin"
+    if [ -n "${target}" ] && [ -f "${bin}/${target}" ]; then
+        # 移除不匹配架构的二进制，减小占用
+        find "${bin}" -type f ! -name "${target}" -delete 2>/dev/null || true
+        chmod +x "${bin}/${target}" 2>/dev/null || true
+        log_msg "飞牛 Skill 已部署（${target}）"
+    else
+        log_msg "当前架构 ${arch} 无匹配的 trim-cli 二进制，仅部署文档"
+    fi
+
+    chmod +x "${dst}/scripts/trim-cli" 2>/dev/null || true
+
+    # 写一份授权指引：OAuth 必须由用户在浏览器里确认，Agent 不能代劳
+    cat > "${DATA_DIR}/fnos-skill-setup.txt" <<EOF
+飞牛 NAS 技能已内置，但还需要一次授权
+========================================
+
+Agent 通过 trim-cli 操作本机 fnOS。trim-cli 使用 OAuth 2.0（PKCE），
+首次使用需由你本人在浏览器中确认授权，Agent 不能代填账号密码。
+
+授权步骤（在本机或任意能访问 NAS 的浏览器中执行）：
+
+  1. 生成授权链接：
+     ${dst}/scripts/trim-cli login --no-open
+
+     该命令会打印一个 http://<NAS_IP>:5666/signin?... 链接，
+     复制到浏览器打开，在 fnOS 登录页确认授权。
+
+  2. 把浏览器给出的 Authorization code 粘贴回命令的提示中。
+
+  3. 验证：
+     ${dst}/scripts/trim-cli system info
+
+说明：
+- scope 按模块申请，未授权的模块会提示需要重新登录。
+- 授权后 token 存在 ~/.config/trim-cli/，随应用数据目录保留。
+- 如需撤销：${dst}/scripts/trim-cli logout
+- 建议遵循最小权限原则，仅授权确实需要的模块。
+EOF
+    chmod 600 "${DATA_DIR}/fnos-skill-setup.txt" 2>/dev/null || true
+    log_msg "授权指引已写入 ${DATA_DIR}/fnos-skill-setup.txt"
+    return 0
+}
+
 # ── 主流程 ──────────────────────────────────────────────────────────────
 log_msg "=== install_callback 开始 ==="
 log_msg "DATA_DIR=${DATA_DIR}"
@@ -354,6 +427,7 @@ apply_wizard_settings || exit 1
 ensure_uv || exit 1
 fetch_source || exit 1
 install_hermes || exit 1
+deploy_fnos_skill
 
 # 修复属主：应用以专用用户运行，确保数据目录可写
 if [ -n "${TRIM_UID}" ] && [ -n "${TRIM_GID}" ]; then

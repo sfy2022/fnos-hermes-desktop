@@ -28,6 +28,10 @@
             {
                 "type": "tips",
                 "helpText": "<br>本应用在局域网内监听 <code>9120</code> 端口，<b>必须设置访问密码</b>以防他人未授权使用 Agent（登录后的用户可以执行命令、读写文件）。<br>若留空，系统会生成随机密码，可在应用数据目录的 <code>access-info.txt</code> 中查看。"
+            },
+            {
+                "type": "tips",
+                "helpText": "<br><b>已内置飞牛 NAS 技能</b><br>安装后 Agent 即可操作本机 fnOS（文件、Docker、应用中心、存储、监控等）。<br><br><b>还需一次授权</b>（OAuth 机制，Agent 不能代你确认）：<br>1. 在 SSH 或终端执行 <code>/var/apps/hermes-desktop/var/skills/fnos-trim/scripts/trim-cli login --no-open</code><br>2. 复制输出的链接到浏览器打开并确认授权<br>3. 把返回的授权码粘贴回命令提示<br><br>详细指引见应用数据目录下的 <code>fnos-skill-setup.txt</code>。"
             }
         ]
     },
