@@ -1,5 +1,5 @@
 appname="hermes-desktop"
-version="0.22.5"
+version="0.22.6"
 display_name="Hermes Desktop"
 desc="NousResearch 出品的 AI Agent 工作区，完整运行在飞牛 NAS 上。对话流式输出、工具调用可视化、并排预览、文件浏览、Artifacts、定时任务、多 Profile、技能管理、终端栏、Git 审阅一应俱全，内置飞牛 NAS 技能，装完即可操控本机。基于官方 Webapp 形态（gateway 内建渲染层），无需 Electron。支持浏览器直连与飞牛桌面内嵌两种入口。"
 platform="all"
