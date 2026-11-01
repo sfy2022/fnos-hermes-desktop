@@ -1,0 +1,17 @@
+# 强制 shell 脚本使用 LF 换行。
+# fnOS 是在 Linux 上执行这些脚本的，若被转成 CRLF 会直接报
+# "bad interpreter: /bin/bash^M" 而无法运行。
+*.sh text eol=lf
+packaging/fpk/cmd/* text eol=lf
+packaging/fpk/wizard/* text eol=lf
+
+# 文本文件统一 LF
+manifest text eol=lf
+packaging/fpk/manifest text eol=lf
+packaging/fpk/config/* text eol=lf
+packaging/fpk/app/ui/config text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+
+# 二进制
+*.PNG binary
