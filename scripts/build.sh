@@ -49,17 +49,56 @@ mkdir -p "${WORK_DIR}" "${OUTPUT_DIR}"
 
 # ── 1. 上游源码 ─────────────────────────────────────────────────────────
 log "同步上游 ${UPSTREAM_REPO}@${UPSTREAM_REF}"
+# 克隆时强制 HTTP/1.1：GitHub 在 HTTP/2 下偶发 "RPC failed / HTTP2 framing error"
 if [ -d "${SRC_DIR}/.git" ]; then
-  git -C "${SRC_DIR}" fetch --depth 1 origin "${UPSTREAM_REF}"
+  git -C "${SRC_DIR}" -c http.version=HTTP/1.1 fetch --depth 1 origin "${UPSTREAM_REF}" \
+    || git -C "${SRC_DIR}" fetch --depth 1 origin "${UPSTREAM_REF}"
   git -C "${SRC_DIR}" reset --hard "origin/${UPSTREAM_REF}"
 else
   rm -rf "${SRC_DIR}"
-  git clone --depth 1 --branch "${UPSTREAM_REF}" \
-    "https://github.com/${UPSTREAM_REPO}.git" "${SRC_DIR}"
+  git -c http.version=HTTP/1.1 clone --depth 1 --branch "${UPSTREAM_REF}" \
+    "https://github.com/${UPSTREAM_REPO}.git" "${SRC_DIR}" \
+    || {
+      # HTTP/1.1 仍失败时，改走 codeload / 代理源码包
+      log "git clone 失败，改用源码包下载"
+      mkdir -p "${WORK_DIR}/srcx"
+      tgzs=(
+        "https://codeload.github.com/${UPSTREAM_REPO}/tar.gz/refs/heads/${UPSTREAM_REF}"
+        "https://gh-proxy.com/https://github.com/${UPSTREAM_REPO}/archive/refs/heads/${UPSTREAM_REF}.tar.gz"
+        "https://ghproxy.net/https://github.com/${UPSTREAM_REPO}/archive/refs/heads/${UPSTREAM_REF}.tar.gz"
+      )
+      ok=0; u=""
+      for u in "${tgzs[@]}"; do
+        log "  尝试 $(echo "${u}" | cut -d/ -f3)"
+        if curl -fsSL --retry 2 --max-time 600 -o "${WORK_DIR}/src.tar.gz" "${u}"; then
+          ok=1
+          break
+        fi
+      done
+      [ "${ok}" = "1" ] || die "上游源码下载失败（GitHub / codeload / 代理均不可达）"
+      tar xzf "${WORK_DIR}/src.tar.gz" -C "${WORK_DIR}/srcx"
+      sub=""
+      sub="$(find "${WORK_DIR}/srcx" -maxdepth 1 -mindepth 1 -type d | head -n 1)"
+      [ -n "${sub}" ] || die "源码包解压异常"
+      mv "${sub}" "${SRC_DIR}"
+    }
 fi
 
-UPSTREAM_SHA="$(git -C "${SRC_DIR}" rev-parse --short HEAD)"
-UPSTREAM_DATE="$(git -C "${SRC_DIR}" log -1 --format=%cI)"
+UPSTREAM_SHA="$(git -C "${SRC_DIR}" rev-parse --short HEAD 2>/dev/null || echo "")"
+UPSTREAM_DATE="$(git -C "${SRC_DIR}" log -1 --format=%cI 2>/dev/null || echo "")"
+
+# 源码包模式（无 .git）时，用 GitHub API 补齐 commit 信息以保持可追溯
+if [ -z "${UPSTREAM_SHA}" ]; then
+  UPSTREAM_SHA="$(curl -fsSL --max-time 30 \
+    "https://api.github.com/repos/${UPSTREAM_REPO}/commits/${UPSTREAM_REF}" 2>/dev/null \
+    | sed -n 's/.*"sha"[[:space:]]*:[[:space:]]*"\([0-9a-f]\{7,40\}\)".*/\1/p' | head -n 1)"
+  UPSTREAM_SHA="${UPSTREAM_SHA:0:8}"
+  UPSTREAM_DATE="$(curl -fsSL --max-time 30 \
+    "https://api.github.com/repos/${UPSTREAM_REPO}/commits/${UPSTREAM_REF}" 2>/dev/null \
+    | sed -n 's/.*"date"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+  [ -n "${UPSTREAM_SHA}" ] || UPSTREAM_SHA="unknown"
+  [ -n "${UPSTREAM_DATE}" ] || UPSTREAM_DATE="unknown"
+fi
 log "上游 commit ${UPSTREAM_SHA} (${UPSTREAM_DATE})"
 
 # 版本号：浅克隆拿不到 tag，改用 GitHub API 查最新 release。
