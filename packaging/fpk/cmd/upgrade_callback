@@ -49,5 +49,29 @@ if [ -n "${TRIM_UID}" ] && [ -n "${TRIM_GID}" ]; then
     chown -R "${TRIM_UID}:${TRIM_GID}" "${DATA_DIR}" 2>/dev/null || true
 fi
 
+# ── 重新部署内置插件 ──────────────────────────────────────────────────
+# 升级会重新 clone 源码，src/plugins/ 被整目录替换 —— 随包内置的插件
+# 必须重新放回去，否则升级后 dashboard tab 直接消失。
+deploy_bundled_plugins() {
+    local src="${TRIM_APPDEST}/plugins"
+    [ -d "${src}" ] || { log_msg "未随包内置插件，跳过"; return 0; }
+
+    local name dst
+    for name in fnos-auth; do
+        [ -d "${src}/${name}" ] || continue
+        for dst in "${TRIM_PKGVAR}/src/plugins/${name}" "${TRIM_PKGVAR}/plugins/${name}"; do
+            mkdir -p "$(dirname "${dst}")" 2>/dev/null || true
+            rm -rf "${dst}"
+            if cp -r "${src}/${name}" "${dst}" 2>/dev/null; then
+                chmod -R a+rX "${dst}" 2>/dev/null || true
+                log_msg "插件 ${name} 已重新部署到 ${dst}"
+            fi
+        done
+    done
+    return 0
+}
+
+deploy_bundled_plugins
+
 log_msg "=== upgrade_callback 完成 ==="
 exit 0
