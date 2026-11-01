@@ -5,6 +5,13 @@
 packaging/fpk/cmd/* text eol=lf
 packaging/fpk/wizard/* text eol=lf
 
+# 内置飞牛 Skill 的脚本同样是 shell 脚本
+packaging/fpk/app/skills/fnos-trim/scripts/* text eol=lf
+packaging/fpk/app/skills/fnos-trim/SKILL.md text eol=lf
+packaging/fpk/app/skills/fnos-trim/manifest.json text eol=lf
+packaging/fpk/app/skills/fnos-trim/entries/* text eol=lf
+packaging/fpk/app/skills/fnos-trim/reference/* text eol=lf
+
 # 文本文件统一 LF
 manifest text eol=lf
 packaging/fpk/manifest text eol=lf
