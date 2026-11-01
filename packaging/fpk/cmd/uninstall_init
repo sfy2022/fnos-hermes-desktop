@@ -20,6 +20,16 @@ log_msg() {
 }
 
 stop_app_processes() {
+    # 0) 优先走 gateway 的官方控制接口做优雅停机。
+    #    gateway 进程以应用专属用户 daemonize 运行（PPID=1），
+    #    root 之外的账户即使同组也无法对它发信号，pkill 常常够不着。
+    #    "pause-for-update" 会 drain 请求、停监听后自行退出，
+    #    比 kill 干净，不会留下半开的数据库或 socket 文件。
+    if [ -f "$(dirname "$0")/pause_gateway.py" ]; then
+        python3 "$(dirname "$0")/pause_gateway.py" "${TRIM_PKGVAR}" 2>/dev/null || true
+        sleep 2
+    fi
+
     # 1) PID 文件精确终止
     if [ -f "${PID_FILE}" ]; then
         local pid

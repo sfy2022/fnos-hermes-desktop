@@ -22,6 +22,12 @@ log_msg() {
 }
 
 stop_app_processes() {
+    # 0) 优先走 gateway 官方控制接口优雅停机（详见 uninstall_init 的说明）
+    if [ -f "$(dirname "$0")/pause_gateway.py" ]; then
+        python3 "$(dirname "$0")/pause_gateway.py" "${TRIM_PKGVAR}" 2>/dev/null || true
+        sleep 2
+    fi
+
     # 1) PID 文件精确终止（文件可能已随数据目录删除）
     if [ -f "${PID_FILE}" ]; then
         local pid
