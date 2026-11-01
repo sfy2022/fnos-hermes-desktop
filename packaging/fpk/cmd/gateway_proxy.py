@@ -48,11 +48,13 @@ from __future__ import annotations
 
 import argparse
 import http.client
+import http.server
 import os
 import re
 import socket
 import socketserver
 import sys
+import threading
 import threading
 import time
 from typing import Optional
@@ -534,6 +536,14 @@ def main() -> int:
     ap.add_argument("--socket", required=True, help="Unix Socket 路径")
     ap.add_argument("--upstream", required=True, help="上游 host:port")
     ap.add_argument("--prefix", default="", help="要剥离的路径前缀")
+    ap.add_argument("--autostart", default="",
+                    help="上游未就绪时用这条命令拉起它（如 hermes gateway run）")
+    ap.add_argument("--autostart-cwd", default="",
+                    help="拉起上游时的工作目录")
+    ap.add_argument("--tcp-listen", default="",
+                    help="额外的对外 TCP 监听地址，如 0.0.0.0:9121。"
+                         "用于在浏览器里直接访问（免登录），"
+                         "Host 头保持回环地址，上游仍判定为本地请求")
     args = ap.parse_args()
 
     host, _, port = args.upstream.rpartition(":")
@@ -542,7 +552,157 @@ def main() -> int:
         print(f"[gateway-proxy] {die}", file=sys.stderr)
         return 1
 
-    return serve(args.socket, (host, int(port)), args.prefix)
+    if args.autostart:
+        _ensure_upstream(args.autostart, args.autostart_cwd,
+                         host, int(port))
+
+    tcp_thread = None
+    if args.tcp_listen:
+        tcp_host, _, tcp_port = args.tcp_listen.rpartition(":")
+        if not tcp_host or not tcp_port.isdigit():
+            print(f"[gateway-proxy] 无效的 --tcp-listen: {args.tcp_listen}", file=sys.stderr)
+            return 1
+        tcp_thread = threading.Thread(
+            target=_serve_tcp,
+            args=(tcp_host, int(tcp_port), (host, int(port)), args.prefix),
+            daemon=True)
+        tcp_thread.start()
+        log(f"额外 TCP 监听 {tcp_host}:{tcp_port}（浏览器直连，免登录）")
+
+    try:
+        return serve(args.socket, (host, int(port)), args.prefix)
+    finally:
+        pass
+
+
+def _ensure_upstream(command: str, cwd: str, host: str, port: int) -> None:
+    """上游没在监听时，用给定命令把它拉起来。
+
+    场景：fnOS 里应用被停止后，网关适配层还活着，但连不上上游，
+    于是桌面图标点开报「拒绝连接」。这里让适配层充当守护，
+    自己把上游拉起来（适配层与应用同属一个用户，有执行权限）。
+    """
+    import subprocess
+    import time
+
+    def _up_alive() -> bool:
+        try:
+            with socket.create_connection((host, port), timeout=2):
+                return True
+        except OSError:
+            return False
+
+    if _up_alive():
+        return
+
+    log(f"上游 {host}:{port} 未就绪，尝试拉起：{command}")
+    try:
+        proc = subprocess.Popen(
+            command, shell=True, cwd=cwd or None,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True)
+        log(f"已拉起上游（PID={proc.pid}）")
+    except Exception as exc:
+        log(f"拉起上游失败：{exc}")
+        return
+
+    for _ in range(30):
+        time.sleep(2)
+        if _up_alive():
+            log("上游已就绪")
+            return
+    log("等待上游超时")
+
+
+def _serve_tcp(host: str, port: int, upstream: tuple[str, int], prefix: str) -> None:
+    """在 TCP 上提供同样的 HTTP 转发（供浏览器直接访问）。
+
+    与 Unix Socket 通道的差别只有一处：Host 头固定为回环地址，
+    上游因此判定为本地请求 —— 不需要登录。
+    """
+    import socketserver
+
+    up_host, up_port = upstream
+
+    class TcpServer(socketserver.ThreadingTCPServer):
+        allow_reuse_address = True
+        daemon_threads = True
+
+    class Direct(http.server.BaseHTTPRequestHandler):
+        """把 TCP 上收到的请求原样转给上游的 TCP 端口。
+
+        用 BaseHTTPRequestHandler 而不是 StreamRequestHandler：
+        后者没有 self.headers（请求头未解析），拿不到 Content-Length。
+        """
+
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *a):
+            pass
+
+        # 不重写 handle_one_request —— 那会跳过 parse_request，
+        # 导致 self.path / self.command / self.headers 都没有被解析。
+        # 由标准流程解析完请求头后再交给 _relay。
+        def do_GET(self):
+            self._relay()
+
+        def do_POST(self):
+            self._relay()
+
+        def do_PUT(self):
+            self._relay()
+
+        def do_DELETE(self):
+            self._relay()
+
+        def do_PATCH(self):
+            self._relay()
+
+        def do_HEAD(self):
+            self._relay()
+
+        def do_OPTIONS(self):
+            self._relay()
+
+        def _relay(self):
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                body = self.rfile.read(length) if length else b""
+                path = self.path.split("?")[0]
+                query = ("?" + self.path.split("?")[1]) if "?" in self.path else ""
+                stripped = path[len(prefix):] if prefix and path.startswith(prefix) else path
+                if not stripped.startswith("/"):
+                    stripped = "/" + stripped
+
+                up = socket.create_connection((up_host, up_port), timeout=60)
+                lines = [f"{self.command} {stripped}{query} HTTP/1.1",
+                         f"Host: {up_host}:{up_port}"]
+                for k, v in self.headers.items():
+                    if k.lower() not in ("host", "content-length", "connection"):
+                        lines.append(f"{k}: {v}")
+                if body:
+                    lines.append(f"Content-Length: {len(body)}")
+                lines.append("Connection: close")
+                up.sendall(("\r\n".join(lines) + "\r\n\r\n").encode())
+                if body:
+                    up.sendall(body)
+                while True:
+                    d = up.recv(65536)
+                    if not d:
+                        break
+                    self.wfile.write(d)
+                self.wfile.flush()
+                up.close()
+            except Exception as exc:
+                log(f"TCP 通道请求出错 {self.path}: {exc}")
+            finally:
+                self.close_connection = True
+
+    log(f"TCP 直连通道就绪 {host}:{port} → {up_host}:{up_port}")
+    try:
+        TcpServer((host, port), Direct).serve_forever()
+    except Exception as exc:
+        log(f"TCP 监听失败 {host}:{port} → {exc}")
 
 
 if __name__ == "__main__":

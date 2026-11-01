@@ -12,6 +12,15 @@
             "control": {
                 "accessPerm": "editable"
             }
+        },
+        "hermes-desktop.Direct": {
+            "title": "Hermes Desktop (直连)",
+            "icon": "images/icon_{0}.png",
+            "type": "url",
+            "protocol": "http",
+            "port": "9121",
+            "url": "/app/hermes-desktop/",
+            "allUsers": true
         }
     }
 }

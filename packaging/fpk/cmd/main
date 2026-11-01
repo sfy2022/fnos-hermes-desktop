@@ -33,6 +33,9 @@ if [ ! -f "${GATEWAY_PROXY}" ]; then
     GATEWAY_PROXY="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/gateway_proxy.py"
 fi
 GATEWAY_PID_FILE="${DATA_DIR}/gateway-proxy.pid"
+# 额外的对外 TCP 端口，供浏览器直接访问（同样免登录：Host 头保持回环地址，
+# 上游因此判定为本地请求）。桌面上「Hermes Desktop (直连)」图标指向它。
+GATEWAY_TCP_PORT="${TRIM_GATEWAY_TCP_PORT:-9121}"
 case "${SERVICE_PORT}" in
     ''|*[!0-9]*) SERVICE_PORT="9120" ;;
 esac
@@ -228,6 +231,9 @@ start_gateway_proxy() {
         --socket "${GATEWAY_SOCKET}" \
         --upstream "127.0.0.1:${SERVICE_PORT}" \
         --prefix "${GATEWAY_PREFIX}" \
+        --tcp-listen "0.0.0.0:${GATEWAY_TCP_PORT}" \
+        --autostart "${VENV_DIR}/bin/hermes gateway run" \
+        --autostart-cwd "${DATA_DIR}" \
         >> "${DATA_DIR}/gateway-proxy.log" 2>&1 &
 
     local gpid=$!
@@ -236,7 +242,7 @@ start_gateway_proxy() {
     local waited=0
     while [ "${waited}" -lt 15 ]; do
         if [ -S "${GATEWAY_SOCKET}" ]; then
-            log_msg "网关适配层就绪（${GATEWAY_SOCKET}）"
+            log_msg "网关适配层就绪（${GATEWAY_SOCKET}，直连端口 ${GATEWAY_TCP_PORT}）"
             return 0
         fi
         if ! check_process "${gpid}"; then
