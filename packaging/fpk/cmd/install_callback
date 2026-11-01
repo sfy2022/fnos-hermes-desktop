@@ -123,7 +123,7 @@ apply_wizard_settings() {
 # ── 飞牛版 Hermes Desktop（由安装向导生成） ─────────────
 webapp:
   enabled: true
-  host: 0.0.0.0
+  host: 127.0.0.1
   port: ${SERVICE_PORT}
 
 dashboard:
@@ -132,7 +132,7 @@ dashboard:
     password: "${pass}"
 EOF
         chmod 600 "${cfg}" 2>/dev/null || true
-        log_msg "已写入 webapp 配置（host=0.0.0.0 port=${SERVICE_PORT} user=${user}）"
+        log_msg "已写入 webapp 配置（host=127.0.0.1 port=${SERVICE_PORT} user=${user}）"
     else
         # 已有 webapp 段：若端口与选定端口不一致（端口冲突后顺延的情况），同步更新
         local cfg_port
