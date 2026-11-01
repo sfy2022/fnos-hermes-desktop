@@ -37,17 +37,60 @@ toast_err() {
     log_msg "ERROR: $1"
 }
 
+# 判断端口是否已被占用。
+# /proc/net/tcp 的格式：local_address 字段形如 "00000000:23A0"（地址:端口，无空格），
+# 后面跟一个空格再是 remote_address。状态 0A = LISTEN。
+# 注意不能写成 ":${hex_port}:" —— 本地端口与远端地址之间是空格而非冒号。
 is_port_in_use() {
     local port="$1" hex_port
     hex_port=$(printf "%04X" "${port}")
-    grep -q ":[[:space:]]*${hex_port}:" /proc/net/tcp /proc/net/tcp6 2>/dev/null
+    awk -v p="${hex_port}" '
+        $4 == "0A" {
+            split($2, a, ":")
+            if (toupper(a[2]) == p) { found = 1; exit }
+        }
+        END { exit(found ? 0 : 1) }
+    ' /proc/net/tcp /proc/net/tcp6 2>/dev/null
 }
 
+# 端口被占用时逐个探测备用端口，直到找到空闲的。
+# 注意：SERVICE_PORT 只是环境变量，gateway 真正读的是 config.yaml 里的 webapp.port，
+# 所以必须同步写回配置，否则改了变量也白改（gateway 仍会去抢被占用的端口）。
 pick_port() {
-    if is_port_in_use "${SERVICE_PORT}"; then
-        log_msg "[端口] ${SERVICE_PORT} 已被占用，回退到 ${FALLBACK_PORT}"
-        SERVICE_PORT="${FALLBACK_PORT}"
+    local cfg="${DATA_DIR}/config.yaml"
+    local candidate
+
+    # 首选：配置里已记录的端口（若它空闲就用它）
+    if ! is_port_in_use "${SERVICE_PORT}"; then
+        return 0
     fi
+
+    # 该端口被别的服务占用（本机常见：另一个 Hermes 实例的 Docker 容器）
+    log_msg "[端口] ${SERVICE_PORT} 已被其他服务占用，自动改用备用端口"
+
+    for candidate in $(seq 29220 29259); do
+        if ! is_port_in_use "${candidate}"; then
+            SERVICE_PORT="${candidate}"
+            log_msg "[端口] 改用 ${SERVICE_PORT}"
+            break
+        fi
+    done
+
+    if is_port_in_use "${SERVICE_PORT}"; then
+        log_msg "[端口] 29220-29259 均被占用，仍使用 ${SERVICE_PORT}（启动可能失败）"
+        return 1
+    fi
+
+    # 把新端口写回配置，让 gateway 真正用上
+    if [ -f "${cfg}" ]; then
+        sed -i "s/^\([[:space:]]*port:[[:space:]]*\)[0-9]\{1,5\}/\1${SERVICE_PORT}/" "${cfg}" 2>/dev/null || true
+        # 若配置里没有 port 行（理论上不会），则补一行
+        if ! grep -q "^[[:space:]]*port:[[:space:]]*${SERVICE_PORT}" "${cfg}" 2>/dev/null; then
+            sed -i "s/^\([[:space:]]*host:[[:space:]]*0\.0\.0\.0\)/\1\n  port: ${SERVICE_PORT}/" "${cfg}" 2>/dev/null || true
+        fi
+        log_msg "[端口] 配置已同步为 ${SERVICE_PORT}"
+    fi
+    return 0
 }
 
 check_process() {

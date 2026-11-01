@@ -50,6 +50,57 @@ gen_password() {
     fi
 }
 
+# ── 选择可用端口 ────────────────────────────────────────────────────────
+# 首选 TRIM_SERVICE_PORT（默认 9120）；被占用则顺延到 29220-29259。
+# 典型冲突场景：本机还跑着另一个 Hermes 实例（Docker 版）占着 9120。
+# 见 cmd/main 中 is_port_in_use 的说明：
+# /proc/net/tcp 的 local_address 是 "地址:端口"（无空格），状态列 0A 表示 LISTEN。
+port_in_use() {
+    local port="$1" hex_port
+    hex_port=$(printf "%04X" "${port}")
+    awk -v p="${hex_port}" '
+        $4 == "0A" {
+            split($2, a, ":")
+            if (toupper(a[2]) == p) { found = 1; exit }
+        }
+        END { exit(found ? 0 : 1) }
+    ' /proc/net/tcp /proc/net/tcp6 2>/dev/null
+}
+
+choose_free_port() {
+    local candidate
+    if ! port_in_use "${SERVICE_PORT}"; then
+        log_msg "使用端口 ${SERVICE_PORT}"
+        return 0
+    fi
+    log_msg "端口 ${SERVICE_PORT} 已被其他服务占用，自动顺延"
+    for candidate in $(seq 29220 29259); do
+        if ! port_in_use "${candidate}"; then
+            SERVICE_PORT="${candidate}"
+            log_msg "改用端口 ${SERVICE_PORT}"
+            return 0
+        fi
+    done
+    log_msg "29220-29259 均被占用，仍使用 ${SERVICE_PORT}（启动可能失败）"
+    return 1
+}
+
+# 端口变了，桌面图标入口与 manifest 必须同步，否则图标打不开
+sync_ui_port() {
+    local port="$1"
+    local ui_cfg="${TRIM_APPDEST}/app/ui/config"
+    local mf="${TRIM_APPDEST}/manifest"
+
+    if [ -f "${ui_cfg}" ]; then
+        sed -i "s|\"port\"[[:space:]]*:[[:space:]]*\"[0-9]\{1,5\}\"|\"port\": \"${port}\"|" "${ui_cfg}" 2>/dev/null || true
+        log_msg "桌面入口端口已同步为 ${port}"
+    fi
+    if [ -f "${mf}" ]; then
+        sed -i "s|^service_port[[:space:]]*=.*|service_port=\"${port}\"|" "${mf}" 2>/dev/null || true
+    fi
+    return 0
+}
+
 # ── 处理安装向导输入 ────────────────────────────────────────────────────
 # 向导变量（无 TRIM_ 前缀）在安装时以环境变量形式注入
 apply_wizard_settings() {
@@ -83,7 +134,15 @@ EOF
         chmod 600 "${cfg}" 2>/dev/null || true
         log_msg "已写入 webapp 配置（host=0.0.0.0 port=${SERVICE_PORT} user=${user}）"
     else
-        log_msg "config.yaml 已含 webapp 段，保留原配置"
+        # 已有 webapp 段：若端口与选定端口不一致（端口冲突后顺延的情况），同步更新
+        local cfg_port
+        cfg_port="$(grep -E "^[[:space:]]*port:[[:space:]]*[0-9]+" "${cfg}" 2>/dev/null | head -n 1 | grep -oE '[0-9]+')"
+        if [ -n "${cfg_port}" ] && [ "${cfg_port}" != "${SERVICE_PORT}" ]; then
+            sed -i "s/^\([[:space:]]*port:[[:space:]]*\)[0-9]\{1,5\}/\1${SERVICE_PORT}/" "${cfg}" 2>/dev/null || true
+            log_msg "config.yaml 端口已从 ${cfg_port} 更新为 ${SERVICE_PORT}"
+        else
+            log_msg "config.yaml 已含 webapp 段，保留原配置"
+        fi
     fi
 
     # 把访问信息单独存一份，便于用户查阅
@@ -443,7 +502,10 @@ log_msg "DATA_DIR=${DATA_DIR}"
 mkdir -p "${DATA_DIR}" 2>/dev/null || true
 
 verify_webapp || exit 1
+# 先选端口，再写配置：配置里的 port 必须与实际监听的端口一致
+choose_free_port || log_msg "端口选择异常，将使用 ${SERVICE_PORT}"
 apply_wizard_settings || exit 1
+sync_ui_port "${SERVICE_PORT}"
 ensure_uv || exit 1
 fetch_source || exit 1
 install_hermes || exit 1
