@@ -108,6 +108,34 @@ EOF
     log_msg "已生成 webapp 配置与访问信息（见 ${DATA_DIR}/access-info.txt）"
 }
 
+SKILL_DIR="${DATA_DIR}/skills/fnos-trim"
+
+# 启动时自愈：若 skills 目录被 Hermes postinstall 覆盖导致 Skill 丢失，
+# 从安装目录（只读，随包分发）补回。
+heal_fnos_skill() {
+    [ -f "${SKILL_DIR}/SKILL.md" ] && return 0
+    local src="${TRIM_APPDEST}/skills/fnos-trim"
+    [ -d "${src}" ] || return 1
+    log_msg "飞牛 Skill 缺失，从安装目录补回"
+    mkdir -p "${DATA_DIR}/skills" 2>/dev/null || true
+    rm -rf "${SKILL_DIR}" 2>/dev/null || true
+    cp -r "${src}" "${SKILL_DIR}" 2>/dev/null || return 1
+    local arch target
+    arch="$(uname -m)"
+    case "${arch}" in
+    x86_64)  target="trim-cli-linux-x64" ;;
+    aarch64) target="trim-cli-linux-arm64" ;;
+    *)       target="" ;;
+    esac
+    if [ -n "${target}" ] && [ -f "${SKILL_DIR}/bin/${target}" ]; then
+        find "${SKILL_DIR}/bin" -type f ! -name "${target}" -delete 2>/dev/null || true
+        chmod +x "${SKILL_DIR}/bin/${target}" 2>/dev/null || true
+    fi
+    chmod +x "${SKILL_DIR}/scripts/trim-cli" 2>/dev/null || true
+    log_msg "飞牛 Skill 已补回"
+    return 0
+}
+
 start_process() {
     if status; then
         log_msg "Hermes Desktop 已在运行"
@@ -126,6 +154,7 @@ start_process() {
 
     pick_port
     ensure_webapp_config
+    heal_fnos_skill || log_msg "飞牛 Skill 补回失败（如需请手动安装官方 fnOS Skill）"
 
     # HERMES_HOME 指向应用数据目录：会话、技能、记忆、配置全部落在这里
     export HERMES_HOME="${DATA_DIR}"
@@ -227,7 +256,6 @@ log)
     ;;
 setup-fnos)
     # 打印飞牛 Skill 的授权指引与当前状态
-    SKILL_DIR="${DATA_DIR}/skills/fnos-trim"
     if [ ! -d "${SKILL_DIR}" ]; then
         echo "未安装飞牛 Skill。请重新安装应用，或手动下载官方 fnOS Skill V2 并放入 ${DATA_DIR}/skills/" > "${TRIM_TEMP_LOGFILE}"
         exit 1

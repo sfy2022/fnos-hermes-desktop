@@ -416,6 +416,26 @@ EOF
     return 0
 }
 
+# 部署后的校验与重试。
+# 竞态：editable 安装的 postinstall 钩子会在安装结束后铺开 Hermes 内置技能，
+# 可能覆盖刚部署的 skills/ 目录。首次安装时这个竞态真实发生过，
+# 所以这里做「部署 → 校验 → 不在就重试」的兜底。
+verify_fnos_skill() {
+    local dst="${DATA_DIR}/skills/fnos-trim"
+    local i
+    for i in 1 2 3; do
+        if [ -f "${dst}/SKILL.md" ] && [ -d "${dst}/bin" ] && [ -x "${dst}/scripts/trim-cli" ]; then
+            log_msg "飞牛 Skill 校验通过"
+            return 0
+        fi
+        log_msg "飞牛 Skill 校验未通过（第 ${i} 次），重新部署"
+        deploy_fnos_skill
+        sleep 2
+    done
+    log_msg "警告：飞牛 Skill 未能稳定部署，功能可能不可用"
+    return 1
+}
+
 # ── 主流程 ──────────────────────────────────────────────────────────────
 log_msg "=== install_callback 开始 ==="
 log_msg "DATA_DIR=${DATA_DIR}"
@@ -428,6 +448,7 @@ ensure_uv || exit 1
 fetch_source || exit 1
 install_hermes || exit 1
 deploy_fnos_skill
+verify_fnos_skill || log_msg "飞牛 Skill 部署校验未通过，但不影响主功能"
 
 # 修复属主：应用以专用用户运行，确保数据目录可写
 if [ -n "${TRIM_UID}" ] && [ -n "${TRIM_GID}" ]; then
