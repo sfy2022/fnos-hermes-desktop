@@ -534,7 +534,9 @@ class ProxyHandler(socketserver.BaseRequestHandler):
 
         home = getattr(self.server, "hermes_home", "") or ""
         launch = _launch_path(home)
-        if not launch:
+        # 空 = 需要登录（sign_in），交给上游给登录页；
+        # 根路径 = 没有可用的一次性链接，避免 302 到自己造成死循环。
+        if not launch or launch.rstrip("/") in ("", "/"):
             return False
 
         target = f"{prefix}{launch}"
@@ -776,7 +778,15 @@ def _launch_path(hermes_home: str) -> str:
         resp = json.loads(bytes(data).split(b"\n", 1)[0].decode("utf-8", "replace"))
         if not resp.get("ok"):
             return ""
-        url = (resp.get("result") or {}).get("url") or ""
+        result = resp.get("result") or {}
+        # sign_in=True：Webapp 处于「需要登录」状态（配了 dashboard.basic_auth
+        # 就会这样），上游给的是一个「去登录」的根地址，而不是一次性链接。
+        # 此时绝不能拿它做重定向 —— 否则 302 到应用自己的根路径，浏览器
+        # 无限重定向，iframe 里表现就是空白/转圈。
+        # 返回空字符串表示「本层不插手」，让上游自己 302 到 /login。
+        if result.get("sign_in"):
+            return ""
+        url = result.get("url") or ""
         if not url:
             return ""
         parts = urlsplit(url)
@@ -944,7 +954,7 @@ def _serve_tcp(host: str, port: int, upstream: tuple[str, int], prefix: str,
                 if stripped == "/" and PAIRED_COOKIE not in (
                         self.headers.get("Cookie") or ""):
                     link = _launch_path(hermes_home)
-                    if link:
+                    if link and link.rstrip("/") not in ("", "/"):
                         target = f"{prefix}{link}"
                         self.send_response(302)
                         self.send_header("Location", target)
