@@ -118,26 +118,59 @@ apply_wizard_settings() {
 
     # 只在缺失时追加，避免重复安装产生重复段落。
     #
-    # 不写 dashboard.basic_auth：那是 Dashboard（多用户 web 控制台）的认证机制，
-    # 与 Webapp 形态无关。Webapp 是否需要登录由上游判定：
-    #     should_require_dashboard_auth(host, hosts)
-    #         = should_require_auth(host) or public_hosts_engage_gate(hosts)
-    #     should_require_auth(host) = host not in _LOOPBACK_HOST_VALUES
-    # 也就是说 —— 只要 webapp 绑在回环地址、且 public_url 为空（都指向回环），
-    # 就完全不需要登录，与官方桌面版体验一致。
-    # 绑到 0.0.0.0 会触发认证 gate，界面上就会多出登录页。
+    # 绑定地址与认证必须成对出现，否则应用装完起不来：
+    #     host=127.0.0.1（回环）→ 上游 should_require_auth() 为假 → 免登录，
+    #                              但只能本机访问，局域网打不开。
+    #     host=0.0.0.0（对外）  → 上游强制要求认证提供方，否则拒绝启动 webapp：
+    #         Refusing to bind dashboard to 0.0.0.0 — the auth gate engages on
+    #         non-loopback binds, but no auth providers are registered
+    #         There is no unauthenticated public-dashboard option. For local-only
+    #         use, bind 127.0.0.1 ...
+    #     此时 gateway 主循环照跑、进程活着，但端口不监听 —— 外部表现是
+    #     「直连打不开」「内嵌 502」，日志里却只有一句 ERROR，很容易漏掉。
+    #
+    # 本应用要的是「局域网可用」，所以绑 0.0.0.0，并必须同时写出
+    # dashboard.basic_auth。认证值是 password_hash（scrypt），不是明文。
     if ! grep -q "^webapp:" "${cfg}" 2>/dev/null; then
+
+        # 生成 scrypt 密码哈希。密码经环境变量传入，避免引号与 shell 展开问题。
+        local pw_hash=""
+        if [ -x "${VENV_DIR}/bin/python3" ]; then
+            pw_hash="$(HERMES_PW="${pass}" \
+                env HOME="${TRIM_PKGHOME:-${DATA_DIR}}" \
+                    HERMES_HOME="${DATA_DIR}" \
+                    PYTHONPATH="${SRC_DIR}" \
+                    "${VENV_DIR}/bin/python3" -c \
+                    'import os; from plugins.dashboard_auth.basic import hash_password; print(hash_password(os.environ["HERMES_PW"]))' \
+                2>>"${LOG_FILE}" | tail -n 1)"
+        fi
+        if [ -z "${pw_hash}" ]; then
+            log_msg "警告：无法生成密码哈希，webapp 绑 0.0.0.0 时将无法启动"
+            log_msg "  已回退为 host=127.0.0.1（仅本机可访问，局域网打不开）"
+            local bind_host="127.0.0.1"
+        else
+            local bind_host="0.0.0.0"
+        fi
+
         cat >> "${cfg}" <<EOF
 
 # ── 飞牛版 Hermes Desktop（由安装向导生成） ─────────────
+# host=0.0.0.0：允许局域网访问。非回环绑定必须配认证（见下方 dashboard 段），
+# 否则 Hermes 拒绝启动 webapp —— gateway 主循环照跑但端口不监听。
 webapp:
   enabled: true
-  host: 0.0.0.0
+  host: ${bind_host}
   port: ${SERVICE_PORT}
   public_url: ""
+
+# 认证提供方（Hermes 要求 password_hash，不是明文密码）
+dashboard:
+  basic_auth:
+    username: ${user}
+    password_hash: "${pw_hash}"
 EOF
         chmod 600 "${cfg}" 2>/dev/null || true
-        log_msg "已写入 webapp 配置（host=127.0.0.1 port=${SERVICE_PORT}）"
+        log_msg "已写入 webapp 配置（host=${bind_host} port=${SERVICE_PORT}，basic_auth=$( [ -n "${pw_hash}" ] && echo 已配置 || echo 未配置 ))"
     else
         # 已有 webapp 段：逐项纠正。
         # 端口：与选定端口不一致时同步（端口冲突后顺延的情况）
@@ -152,6 +185,45 @@ EOF
         if grep -qE '^[[:space:]]*public_url:[[:space:]]*"?[^"[:space:]]' "${cfg}" 2>/dev/null; then
             sed -i "s/^\([[:space:]]*public_url:[[:space:]]*\).*/\1\"\"/" "${cfg}" 2>/dev/null || true
             log_msg "config.yaml 的 webapp.public_url 已清空（避免触发认证 gate）"
+        fi
+
+        # 已有 webapp 段但绑的是 0.0.0.0、又缺认证 —— 补上 dashboard.basic_auth。
+        # 升级场景常见：旧版本写的是回环绑定（免登录），新版本改成对外，
+        # 但配置文件里没有认证，于是上游拒绝启动 webapp（端口不监听）。
+        local cur_host
+        cur_host="$(sed -n 's/^[[:space:]]*host:[[:space:]]*//p' "${cfg}" 2>/dev/null \
+            | head -n 1 | tr -d '"[:space:]')"
+        local has_basic
+        has_basic="$(grep -cE '^[[:space:]]*basic_auth:' "${cfg}" 2>/dev/null || echo 0)"
+
+        if [ "${cur_host}" != "127.0.0.1" ] && [ "${cur_host}" != "localhost" ] \
+                && [ "${has_basic}" = "0" ]; then
+            local pw_hash2=""
+            if [ -x "${VENV_DIR}/bin/python3" ]; then
+                pw_hash2="$(HERMES_PW="${pass}" \
+                    env HOME="${TRIM_PKGHOME:-${DATA_DIR}}" \
+                        HERMES_HOME="${DATA_DIR}" \
+                        PYTHONPATH="${SRC_DIR}" \
+                        "${VENV_DIR}/bin/python3" -c \
+                        'import os; from plugins.dashboard_auth.basic import hash_password; print(hash_password(os.environ["HERMES_PW"]))' \
+                    2>>"${LOG_FILE}" | tail -n 1)"
+            fi
+            if [ -n "${pw_hash2}" ]; then
+                cat >> "${cfg}" <<EOF
+
+# 认证提供方（由安装/升级流程补充；绑非回环地址时必需）
+dashboard:
+  basic_auth:
+    username: ${user}
+    password_hash: "${pw_hash2}"
+EOF
+                chmod 600 "${cfg}" 2>/dev/null || true
+                log_msg "config.yaml 已补充 dashboard.basic_auth（host=${cur_host} 需要认证）"
+            else
+                # 补不上认证就退回回环，至少让应用能起来
+                sed -i "s/^\([[:space:]]*host:[[:space:]]*\).*/\1127.0.0.1/" "${cfg}" 2>/dev/null || true
+                log_msg "警告：无法生成密码哈希，已回退 host=127.0.0.1（仅本机可访问）"
+            fi
         fi
     fi
 
