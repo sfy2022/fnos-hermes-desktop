@@ -3,6 +3,15 @@
         "hermes-desktop.Application": {
             "title": "Hermes Desktop",
             "icon": "images/icon_{0}.png",
+            "type": "url",
+            "protocol": "http",
+            "port": "9121",
+            "url": "/app/hermes-desktop/",
+            "allUsers": true
+        },
+        "hermes-desktop.Embedded": {
+            "title": "Hermes Desktop (内嵌)",
+            "icon": "images/icon_{0}.png",
             "type": "iframe",
             "protocol": "",
             "gatewayPrefix": "/app/hermes-desktop",
@@ -12,15 +21,6 @@
             "control": {
                 "accessPerm": "editable"
             }
-        },
-        "hermes-desktop.Direct": {
-            "title": "Hermes Desktop (直连)",
-            "icon": "images/icon_{0}.png",
-            "type": "url",
-            "protocol": "http",
-            "port": "9121",
-            "url": "/app/hermes-desktop/",
-            "allUsers": true
         }
     }
 }

@@ -111,6 +111,18 @@ def rewrite_html(body: bytes, prefix: str) -> bytes:
     html = _HTML_ABS_RE.sub(
         lambda m: m.group(1) + _add_prefix(m.group(2), prefix), html)
 
+    # launch 页面从 URL 的 fragment 里读凭据（location.hash.slice(1)）。
+    # 浏览器跟随 302 重定向时会丢弃 Location 里的 fragment，所以本层把
+    # 凭据改用 query 传递（见 _launch_path），这里相应地让页面改读
+    # location.search。两者都读，兼容直接打开原始 URL 的情形。
+    if "location.hash.slice(1)" in html:
+        html = html.replace(
+            "location.hash.slice(1)",
+            "(location.search || location.hash).slice(1)")
+        html = html.replace(
+            "location.hash.slice(1)",
+            "(location.search || location.hash).slice(1)")
+
     # 注入前缀桥接脚本：前端的绝对路径 API 调用必须加前缀才能到达本应用。
     # 放在主 bundle 之前，才能在应用代码运行前 hook 住 fetch/XHR/WebSocket。
     if prefix and "__FNOS_BRIDGE__" not in html:
@@ -596,9 +608,6 @@ def main() -> int:
         print(f"[gateway-proxy] {die}", file=sys.stderr)
         return 1
 
-    # 自我监测重载：脚本被替换后自动重新 exec
-    threading.Thread(target=_watch_self_and_reload, daemon=True).start()
-
     if args.autostart:
         _ensure_upstream(args.autostart, args.autostart_cwd,
                          host, int(port))
@@ -708,49 +717,86 @@ def _launch_path(hermes_home: str) -> str:
         path = parts.path or "/"
         if parts.query:
             path = f"{path}?{parts.query}"
-        # 凭据在 fragment 里：launch 页面用
+        # 凭据在 launch URL 的 fragment 里（#ticket=xxx），launch 页面用
         #   new URLSearchParams(location.hash.slice(1))
-        # 读取（#token=...）。fragment 不会随请求发给服务器，但浏览器
-        # 会在页面里读到 —— 所以重定向时必须原样带上。
+        # 读取。但浏览器跟随 302 重定向时会**丢弃** Location 里的 fragment
+        # （实测：重定向后地址栏里没有 #ticket，上游于是报
+        #  "This launch link was already used or has expired"）。
+        #
+        # 所以这里把 fragment 的键值对改写成 query —— query 在重定向中
+        # 会被保留下来；再由 rewrite_html 把页面的读取位置从
+        # location.hash 改成 location.search。
         if parts.fragment:
-            path = f"{path}#{parts.fragment}"
+            frag = parts.fragment
+            if "=" in frag:
+                path = f"{path}?{frag}"
+            else:
+                path = f"{path}#{frag}"
         return path
     except Exception as exc:
         log(f"申请启动链接失败：{exc}")
         return ""
 
 
-def _watch_self_and_reload() -> None:
-    """检测自身脚本是否被替换；变了就重新 exec 自己。
+#: 代理持有的 socket fd（重载前需关闭，否则新进程 bind 同路径会失败）
+_proxy_fds: set = set()
 
-    这个进程与应用同用户运行，外部（SSH 等普通账号）无法直接终止它，
-    于是排障时改完脚本没法生效。自我监测解决了这个问题：改文件即可重载，
-    不必重启整个应用。
+
+def _socket_arg() -> str:
+    """从命令行里取出 --socket 的值。"""
+    argv = sys.argv
+    for i, a in enumerate(argv):
+        if a == "--socket" and i + 1 < len(argv):
+            return argv[i + 1]
+        if a.startswith("--socket="):
+            return a.split("=", 1)[1]
+    return ""
+
+
+def _rewrite_response_body(raw: bytes, path: str, prefix: str) -> bytes:
+    """对上游响应做与 socket 通道一致的改写（HTML 前缀、launch 凭据读取位置）。
+
+    socket 通道走 ProxyHandler，响应经过 rewrite_html / rewrite_javascript；
+    TCP 通道是原始字节转发，若不改写，launch 页面仍会从 location.hash 取
+    凭据 —— 而浏览器重定向时已把 fragment 丢掉，于是配对失败。
     """
-    import hashlib
-    import time
+    head, sep, body = raw.partition(b"\r\n\r\n")
+    if not sep:
+        return raw
 
-    me = os.path.abspath(__file__)
     try:
-        with open(me, "rb") as fh:
-            original = hashlib.sha256(fh.read()).hexdigest()
-    except OSError:
-        return
+        lines = head.decode("latin-1").split("\r\n")
+    except Exception:
+        return raw
 
-    while True:
-        time.sleep(3)
-        try:
-            with open(me, "rb") as fh:
-                current = hashlib.sha256(fh.read()).hexdigest()
-        except OSError:
+    status = lines[0] if lines else ""
+    headers = []
+    for line in lines[1:]:
+        if ":" in line:
+            k, v = line.split(":", 1)
+            headers.append([k.strip(), v.strip()])
+
+    ctype = ""
+    for k, v in headers:
+        if k.lower() == "content-type":
+            ctype = v
+            break
+
+    if should_rewrite(path, ctype) == "html":
+        body = rewrite_html(body, prefix)
+
+    out_headers = []
+    for k, v in headers:
+        if k.lower() in ("content-length", "transfer-encoding", "connection"):
             continue
-        if current != original:
-            log("检测到脚本已更新，重新加载")
-            try:
-                os.execv(sys.executable, [sys.executable, me] + sys.argv[1:])
-            except Exception as exc:
-                log(f"重新加载失败：{exc}")
-                return
+        out_headers.append((k, v))
+    out_headers.append(("Content-Length", str(len(body))))
+    out_headers.append(("Connection", "close"))
+
+    head_bytes = status.encode("latin-1") + b"\r\n"
+    head_bytes += b"".join(f"{k}: {v}\r\n".encode("latin-1") for k, v in out_headers)
+    head_bytes += b"\r\n"
+    return head_bytes + body
 
 
 def _serve_tcp(host: str, port: int, upstream: tuple[str, int], prefix: str,
@@ -839,13 +885,19 @@ def _serve_tcp(host: str, port: int, upstream: tuple[str, int], prefix: str,
                 up.sendall(("\r\n".join(lines) + "\r\n\r\n").encode())
                 if body:
                     up.sendall(body)
+
+                # 读完上游响应：Connection: close，上游会自己收尾。
+                raw = b""
                 while True:
                     d = up.recv(65536)
                     if not d:
                         break
-                    self.wfile.write(d)
-                self.wfile.flush()
+                    raw += d
                 up.close()
+
+                raw = _rewrite_response_body(raw, stripped, prefix)
+                self.wfile.write(raw)
+                self.wfile.flush()
             except Exception as exc:
                 log(f"TCP 通道请求出错 {self.path}: {exc}")
             finally:
@@ -853,7 +905,8 @@ def _serve_tcp(host: str, port: int, upstream: tuple[str, int], prefix: str,
 
     log(f"TCP 直连通道就绪 {host}:{port} → {up_host}:{up_port}")
     try:
-        TcpServer((host, port), Direct).serve_forever()
+        tcp_server = TcpServer((host, port), Direct)
+        tcp_server.serve_forever()
     except Exception as exc:
         log(f"TCP 监听失败 {host}:{port} → {exc}")
 
