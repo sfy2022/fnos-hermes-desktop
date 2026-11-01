@@ -232,7 +232,7 @@ start_gateway_proxy() {
         --upstream "127.0.0.1:${SERVICE_PORT}" \
         --prefix "${GATEWAY_PREFIX}" \
         --tcp-listen "0.0.0.0:${GATEWAY_TCP_PORT}" \
-        --autostart "${VENV_DIR}/bin/hermes gateway run" \
+        --autostart "${VENV_DIR}/bin/hermes gateway run --replace" \
         --autostart-cwd "${DATA_DIR}" \
         --hermes-home "${DATA_DIR}" \
         >> "${DATA_DIR}/gateway-proxy.log" 2>&1 &
@@ -306,7 +306,12 @@ start_process() {
     # 写进 site-packages 的 .pth，任何目录都能 import hermes_cli。
     cd "${DATA_DIR}" || return 1
 
-    nohup "${HERMES_BIN}" gateway run >> "${LOG_FILE}" 2>&1 &
+    # --replace：接管 host。
+    # 若上一次运行的 gateway 还残留（崩溃、被强杀、或手动启动过），
+    # 不加这个参数时 Hermes 会拒绝启动并报：
+    #   "A gateway already owns this host and has not published its served set yet."
+    # 加了它就能干净地接管，避免应用「无法启用」。
+    nohup "${HERMES_BIN}" gateway run --replace >> "${LOG_FILE}" 2>&1 &
 
     local pid=$!
     printf "%s" "${pid}" > "${PID_FILE}"
