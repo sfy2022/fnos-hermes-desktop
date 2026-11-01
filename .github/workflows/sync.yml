@@ -53,11 +53,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          REPO_FULL="${GITHUB_REPOSITORY:-<owner>/<repo>}"
+          REPO_FULL="${GITHUB_REPOSITORY:-}"
           OWNER="${REPO_FULL%%/*}"
           REPO_NAME="${REPO_FULL##*/}"
 
-          if [ -n "${GITEA_TOKEN}" ] || echo "${GITHUB_SERVER_URL:-}" | grep -q "<gitea-host>"; then
+          if [ -n "${GITEA_TOKEN}" ]; then
             echo ">>> Gitea：触发 build.yml"
             if [ -z "${GITEA_TOKEN}" ]; then
               echo "缺少 GITEA_TOKEN，无法触发"

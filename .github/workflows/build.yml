@@ -130,7 +130,7 @@ jobs:
           fi
 
           # 仓库标识：Gitea 与 GitHub 都提供 GITHUB_REPOSITORY
-          REPO_FULL="${GITHUB_REPOSITORY:-<owner>/<repo>}"
+          REPO_FULL="${GITHUB_REPOSITORY:-}"
 
           # 发布逻辑放在独立脚本里，避免 YAML 嵌套引号踩坑
           python3 scripts/publish_release.py \
