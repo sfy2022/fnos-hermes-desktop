@@ -190,7 +190,8 @@ for pair in "gateway_proxy.py" "fnos_bridge.py"; do
     src_file="${REPO_ROOT}/scripts/${pair}"
     dist_file="${REPO_ROOT}/packaging/fpk/cmd/${pair}"
     if [ -f "${src_file}" ] && [ -f "${dist_file}" ]; then
-        if ! cmp -s "${src_file}" "${dist_file}"; then
+        # 忽略行尾差异（Windows 开发环境是 CRLF，Linux 上是 LF）
+        if ! diff -q --strip-trailing-cr "${src_file}" "${dist_file}" >/dev/null 2>&1; then
             die "${pair} 与 packaging/fpk/cmd/ 下的分发副本不一致，请先同步：cp scripts/${pair} packaging/fpk/cmd/${pair}"
         fi
     fi
