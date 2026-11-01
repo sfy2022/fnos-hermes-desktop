@@ -674,7 +674,10 @@ def _launch_path(hermes_home: str) -> str:
     这里只取它的 path+query，由本层用相对路径重定向回去，保持同源。
     """
     if not hermes_home:
-        return ""
+        # 没显式指定时，从脚本自身位置推断：适配层被部署在应用数据目录，
+        # 那里就有 gateway.sock。这样即便旧版 cmd/main 没传 --hermes-home
+        # （cmd/ 目录是 root 只读，升级前无法替换），也能正常工作。
+        hermes_home = os.path.dirname(os.path.abspath(__file__))
     sock_path = os.path.join(hermes_home, "gateway.sock")
     if not os.path.exists(sock_path):
         return ""
