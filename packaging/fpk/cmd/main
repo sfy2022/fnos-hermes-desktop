@@ -170,13 +170,11 @@ start_process() {
     log_msg "HERMES_HOME=${HERMES_HOME}"
     log_msg "HERMES_WEBAPP_DIST=${HERMES_WEBAPP_DIST}"
 
-    # editable 安装下，hermes 入口需要能找到源码包
-    if [ -d "${SRC_DIR}/hermes_cli" ]; then
-        cd "${SRC_DIR}" || return 1
-        export PYTHONPATH="${SRC_DIR}:${PYTHONPATH:-}"
-    else
-        cd "${DATA_DIR}" || return 1
-    fi
+    # 工作目录必须是 HERMES_HOME，不能是源码目录。
+    # 实测：在源码目录里跑 gateway 会让 Hermes 误判 project_root，
+    # 导致 webapp 挂载失败（9120 端口不监听）。editable 安装已把源码
+    # 写进 site-packages 的 .pth，任何目录都能 import hermes_cli。
+    cd "${DATA_DIR}" || return 1
 
     nohup "${HERMES_BIN}" gateway run >> "${LOG_FILE}" 2>&1 &
 
