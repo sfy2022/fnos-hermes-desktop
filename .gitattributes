@@ -31,5 +31,7 @@ packaging/fpk/app/skills/fnos-trim/bin/* binary
 packaging/fpk/ICON.PNG binary
 packaging/fpk/ICON_256.PNG binary
 packaging/fpk/app/ui/images/*.png binary
-*.py text eol=lf   # Python 源码
-scripts/*.sh text eol=lf   # Shell 脚本
+*.py text eol=lf
+# Python 源码
+scripts/*.sh text eol=lf
+# Shell 脚本
