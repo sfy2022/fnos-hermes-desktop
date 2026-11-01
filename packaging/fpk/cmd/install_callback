@@ -573,8 +573,24 @@ deploy_fnos_auth_plugin() {
     #   ${DATA_DIR}/plugins/      —— 用户插件目录（get_hermes_home()/plugins），
     #                                给 PM 与 fnos_auth_* 工具用
     # 只放后者时 tab 不出现（实测），因为 bundled 与 user 插件走不同的发现路径。
+    # 三个位置，各司其职（都是实测出来的）：
+    #   src/plugins/         —— bundled 形态，Agent 侧插件发现（工具注册）
+    #   plugins/<n>/desktop/ —— 统一包的 desktop half（RUNTIME door 之一）
+    #   desktop-plugins/<n>/ —— RUNTIME door 之二，**webapp 前端实际扫描这个**，
+    #                           dashboard tab 就靠它出现
     local dst_src="${DATA_DIR}/src/plugins/fnos-auth"
-    mkdir -p "${DATA_DIR}/plugins" "${DATA_DIR}/src/plugins" 2>/dev/null || true
+    mkdir -p "${DATA_DIR}/plugins" "${DATA_DIR}/src/plugins" \
+             "${DATA_DIR}/desktop-plugins" 2>/dev/null || true
+
+    # 前端要的独立副本：plugin.js 直接放 desktop-plugins/<id>/
+    if [ -f "${src}/desktop/plugin.js" ]; then
+        local dst_dp="${DATA_DIR}/desktop-plugins/fnos-auth"
+        mkdir -p "${dst_dp}" 2>/dev/null || true
+        if cp -f "${src}/desktop/plugin.js" "${dst_dp}/plugin.js" 2>/dev/null; then
+            chmod a+rX "${dst_dp}" "${dst_dp}/plugin.js" 2>/dev/null || true
+            log_msg "fnOS 授权面板已部署到 ${dst_dp}"
+        fi
+    fi
 
     for dst in "${dst_src}" "${DATA_DIR}/plugins/fnos-auth"; do
         rm -rf "${dst}"
