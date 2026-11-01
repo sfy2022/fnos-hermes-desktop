@@ -384,10 +384,18 @@ install_hermes() {
 
     if [ ! -x "${VENV_DIR}/bin/hermes" ]; then
         log_msg "创建 Python 3.14 虚拟环境 ..."
-        "${UV_BIN}" venv --python 3.14 "${VENV_DIR}" >>"${LOG_FILE}" 2>&1
-        if [ ! -x "${VENV_DIR}/bin/python3" ]; then
+        "${UV_BIN}" venv --clear --python 3.14 "${VENV_DIR}" >>"${LOG_FILE}" 2>&1
+        # 兜底：uv 版本过旧不支持 --clear 时，先清掉残留的 venv。
+    # 卸载中断或用户选择保留数据时，venv 目录会残留，
+    # 导致 uv 报 "A directory already exists at .../venv" 安装失败。
+    if [ -d "${VENV_DIR}" ] && [ ! -x "${VENV_DIR}/bin/python3" ]; then
+        log_msg "检测到不完整的 venv 残留，先清理"
+        rm -rf "${VENV_DIR}" 2>/dev/null || true
+    fi
+
+    if [ ! -x "${VENV_DIR}/bin/python3" ]; then
             log_msg "Python 3.14 创建失败，回退 3.12"
-            "${UV_BIN}" venv --python 3.12 "${VENV_DIR}" >>"${LOG_FILE}" 2>&1
+            "${UV_BIN}" venv --clear --python 3.12 "${VENV_DIR}" >>"${LOG_FILE}" 2>&1
         fi
         if [ ! -x "${VENV_DIR}/bin/python3" ]; then
             toast_err "创建虚拟环境失败：$(tail -3 "${LOG_FILE}" 2>/dev/null)"
