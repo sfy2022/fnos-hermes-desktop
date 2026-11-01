@@ -4,9 +4,9 @@
             "title": "Hermes Desktop",
             "icon": "images/icon_{0}.png",
             "type": "url",
-            "protocol": "http",
-            "port": "9120",
-            "url": "/",
+            "protocol": "",
+            "port": "5666",
+            "url": "/app/hermes-desktop/",
             "allUsers": true
         },
         "hermes-desktop.Embedded": {

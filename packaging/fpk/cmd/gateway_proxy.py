@@ -688,6 +688,13 @@ def main() -> int:
         if not tcp_host or not tcp_port.isdigit():
             print(f"[gateway-proxy] 无效的 --tcp-listen: {args.tcp_listen}", file=sys.stderr)
             return 1
+        # 强制只绑回环：对外访问统一走 fnOS 网关（它会校验飞牛登录态）。
+        # 若对 0.0.0.0 开放，局域网内任何人都能直接操作 Hermes，
+        # 绕过网关的鉴权 —— 而 Hermes 绑回环后自身是免登录的。
+        if tcp_host not in ("127.0.0.1", "localhost", "::1"):
+            log(f"TCP 通道改为只监听回环（原 {tcp_host}）："
+                f"对外访问请走 fnOS 网关 /app/hermes-desktop")
+            tcp_host = "127.0.0.1"
         tcp_thread = threading.Thread(
             target=_serve_tcp,
             args=(tcp_host, int(tcp_port), (host, int(port)), args.prefix,
