@@ -173,9 +173,11 @@ class ThreadingUnixHTTPServer(socketserver.ThreadingMixIn, socketserver.UnixStre
         except OSError as exc:
             log(f"移除旧 socket 失败（忽略）：{exc}")
         super().__init__(socket_path, handler_cls)
-        # 权限：让 fnOS 网关（root/其他用户组）能连上
+        # 权限：与 fnOS 官方微应用参考实现一致（755）。
+        # fnOS 网关以 root 身份连接 socket，755 足够；
+        # 属主保持为应用用户，便于 fnOS 校验 socket 与应用是否匹配。
         try:
-            os.chmod(socket_path, 0o666)
+            os.chmod(socket_path, 0o755)
         except OSError as exc:
             log(f"设置 socket 权限失败（忽略）：{exc}")
 
