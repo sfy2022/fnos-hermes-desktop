@@ -111,6 +111,22 @@ def rewrite_html(body: bytes, prefix: str) -> bytes:
     html = _HTML_ABS_RE.sub(
         lambda m: m.group(1) + _add_prefix(m.group(2), prefix), html)
 
+    # 设置 Hermes 自己的子路径基准。
+    #
+    # 前端所有路由/跳转都基于 window.__HERMES_BASE_PATH__：
+    #   fetch(basePath + '/auth/password-login', ...)
+    #   location.href = basePath + '/'
+    # 上游默认注入空串（站点根），在网关子路径下就会跳到 fnOS 根 ——
+    # 表现正是「登录成功后跳到飞牛桌面」。
+    #
+    # 在这里直接改成网关前缀，前端的所有跳转自然带上 /app/hermes-desktop，
+    # 不必去 hook location.href（那属性在多数浏览器里无法覆盖 setter）。
+    if prefix:
+        html = re.sub(
+            r'__HERMES_BASE_PATH__\s*=\s*(""|\'\'|"[^"]*"|\'[^\']*\')',
+            f'__HERMES_BASE_PATH__ = "{prefix}"',
+            html)
+
     # launch 页面从 URL 的 fragment 里读凭据（location.hash.slice(1)）。
     # 浏览器跟随 302 重定向时会丢弃 Location 里的 fragment，所以本层把
     # 凭据改用 query 传递（见 _launch_path），这里相应地让页面改读
