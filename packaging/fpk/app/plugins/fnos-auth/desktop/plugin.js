@@ -14,7 +14,7 @@
  * 只能 import @hermes/plugin-sdk、react、react/jsx-runtime。
  */
 
-import { Badge, Button, Input, cn } from '@hermes/plugin-sdk'
+import { Badge, Button, Input, Tip, cn } from '@hermes/plugin-sdk'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
@@ -481,6 +481,68 @@ function FnosAuthPage({ rest }) {
   })
 }
 
+
+// ── 状态栏入口 ────────────────────────────────────────────────────────
+// 这个前端版本的侧边栏是固定的（contributions 的 area 只有 layouts / panes /
+// routes / statusBar.* / titleBar.*，没有 nav/sidebar），插件无法往左侧导航
+// 插入口。所以入口放右下角状态栏：本来就放状态与工具，不占主界面空间，
+// 还能顺带显示「已授权/总数」当作状态指示。
+
+function FnosAuthChip({ rest }) {
+  const [stat, setStat] = useState(null)
+
+  useEffect(() => {
+    let alive = true
+    const poll = async () => {
+      try {
+        const r = await rest('/devices')
+        const list = Array.isArray(r) ? r : (r && r.devices) || []
+        if (alive) {
+          setStat({ total: list.length, ok: list.filter(d => d.authorized).length })
+        }
+      } catch {
+        /* 状态栏里的探测失败不打扰用户 */
+      }
+    }
+    poll()
+    const t = setInterval(poll, 60000)
+    return () => {
+      alive = false
+      clearInterval(t)
+    }
+  }, [rest])
+
+  const label = stat && stat.total ? `fnOS ${stat.ok}/${stat.total}` : 'fnOS 授权'
+  const warn = stat && stat.total > 0 && stat.ok < stat.total
+
+  return jsx(Tip, {
+    label: 'fnOS 授权 · 管理 Agent 的 NAS 访问权限',
+    children: jsx('button', {
+      type: 'button',
+      onClick: () => {
+        // 路由已由下面的 area:'routes' 注册，改 hash 即可切过去
+        location.hash = '#/fnos-auth'
+      },
+      className: cn(
+        'inline-flex h-full items-center gap-1.5 px-1.5 text-[0.6875rem] transition-colors',
+        'text-(--ui-text-tertiary) hover:bg-(--chrome-action-hover) hover:text-foreground'
+      ),
+      children: jsxs('span', {
+        className: 'inline-flex items-center gap-1',
+        children: [
+          jsx('span', {
+            className: cn(
+              'h-1.5 w-1.5 rounded-full',
+              warn ? 'bg-amber-500' : 'bg-emerald-500'
+            )
+          }),
+          jsx('span', { children: label })
+        ]
+      })
+    })
+  })
+}
+
 // ── 插件定义 ──────────────────────────────────────────────────────────
 
 export default {
@@ -488,12 +550,21 @@ export default {
   name: 'fnOS 授权',
   description: '给 Agent 开通飞牛 NAS 的操作权限',
   register(ctx) {
+    // 页面路由（直接访问 #/fnos-auth 也能打开）
     ctx.register({
       area: 'routes',
       id: 'fnos-auth:page',
       title: 'fnOS 授权',
       data: { path: '/fnos-auth' },
       render: () => jsx(FnosAuthPage, { rest: ctx.rest })
+    })
+
+    // 右下角状态栏入口 + 授权进度指示
+    ctx.register({
+      area: 'statusBar.right',
+      id: 'fnos-auth:chip',
+      order: 120,
+      render: () => jsx(FnosAuthChip, { rest: ctx.rest })
     })
   }
 }
