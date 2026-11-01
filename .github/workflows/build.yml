@@ -84,6 +84,18 @@ jobs:
           ls -la dist/
           cat dist/build-info.json
 
+      # 产物用统一命名格式，避免下载后与其它版本混淆
+      - name: 规范化产物文件名
+        run: |
+          set -euo pipefail
+          VERSION=$(python3 -c "import json;print(json.load(open('dist/build-info.json'))['version'])")
+          UPSTREAM=$(python3 -c "import json;print(json.load(open('dist/build-info.json'))['upstream_sha'])")
+          NEW="Hermes-Desktop-fnOS-v${VERSION}-${UPSTREAM}.fpk"
+          cp "dist/hermes-desktop.fpk" "dist/${NEW}"
+          rm -f "dist/hermes-desktop.fpk"
+          echo "产物名：${NEW}"
+          ls -la dist/
+
       # 产物用 v3 上传：Gitea 只支持到 v3，GitHub 同样接受 v3
       - name: 上传构建产物
         uses: actions/upload-artifact@v3
@@ -109,7 +121,9 @@ jobs:
           SHA=$(python3 -c "import json;print(json.load(open('dist/build-info.json'))['upstream_sha'])")
           TAG="v${VERSION}"
 
-          SHA256=$(sha256sum dist/hermes-desktop.fpk | cut -d' ' -f1)
+          FPK_FILE=$(ls dist/Hermes-Desktop-fnOS-v*.fpk 2>/dev/null | head -1)
+          [ -n "${FPK_FILE}" ] || { echo "找不到规范化后的产物"; exit 1; }
+          SHA256=$(sha256sum "${FPK_FILE}" | cut -d' ' -f1)
           {
             echo "Hermes 官方 Desktop 工作区的飞牛原生版。"
             echo
@@ -138,4 +152,4 @@ jobs:
             --tag "${TAG}" \
             --title "Hermes Desktop for fnOS ${VERSION}" \
             --notes-file release-notes.md \
-            --assets dist/hermes-desktop.fpk dist/build-info.json
+            --assets "${FPK_FILE}" dist/build-info.json

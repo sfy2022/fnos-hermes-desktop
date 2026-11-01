@@ -222,8 +222,12 @@ FPK_OUT="$(find "${WORK_DIR}" -maxdepth 1 -name '*.fpk' -newermt '-5 minutes' | 
 [ -n "${FPK_OUT}" ] || FPK_OUT="$(find "${WORK_DIR}" -maxdepth 1 -name '*.fpk' | head -n 1)"
 [ -n "${FPK_OUT}" ] || die "未生成 fpk"
 
-FINAL="${OUTPUT_DIR}/hermes-desktop.fpk"
+# 产物用统一命名格式：产品名-平台-版本-上游commit
+# 多版本并存时靠文件名即可分辨，不必再翻 manifest。
+FINAL="${OUTPUT_DIR}/Hermes-Desktop-fnOS-v${HERMES_VERSION}-${UPSTREAM_SHA}.fpk"
 cp -f "${FPK_OUT}" "${FINAL}"
+# 保留一个固定名，便于脚本引用
+cp -f "${FPK_OUT}" "${OUTPUT_DIR}/hermes-desktop.fpk"
 
 # ── 5. 校验与元信息 ─────────────────────────────────────────────────────
 SHA="$(sha256sum "${FINAL}" | cut -d' ' -f1)"
@@ -237,7 +241,7 @@ cat > "${OUTPUT_DIR}/build-info.json" <<EOF
   "upstream_sha": "${UPSTREAM_SHA}",
   "upstream_date": "${UPSTREAM_DATE}",
   "bundle_files": ${BUNDLE_FILES},
-  "fpk_name": "hermes-desktop.fpk",
+  "fpk_name": "Hermes-Desktop-fnOS-v${HERMES_VERSION}-${UPSTREAM_SHA}.fpk",
   "fpk_size": ${SIZE},
   "fpk_sha256": "${SHA}",
   "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
