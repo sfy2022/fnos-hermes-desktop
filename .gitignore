@@ -4,6 +4,11 @@ dist/
 .build-smoke/
 *.fpk
 
+# 例外：插件的前端资源是**源码**（手写 JS/CSS，非构建产物），
+# 缺了它插件无法加载 tab。上面的 dist/ 规则会把它一起排除，所以显式放开。
+!packaging/fpk/app/plugins/*/dashboard/dist/
+!packaging/fpk/app/plugins/*/dashboard/dist/**
+
 # 打包出的渲染层（体积大，由 CI 重新生成）
 packaging/fpk/app/webapp/
 
