@@ -25,10 +25,31 @@ done
 log "    模板完整"
 
 log "2/5 校验 shell 脚本语法"
-for f in "${REPO_ROOT}"/packaging/fpk/cmd/*; do
+for f in "${REPO_ROOT}"/packaging/fpk/cmd/* "${REPO_ROOT}"/packaging/fpk/app/skills/fnos-trim/scripts/trim-cli; do
   bash -n "${f}" || die "语法错误：${f}"
 done
 log "    全部通过"
+
+log "2b/5 校验换行符（Linux 执行，CRLF 会导致 bad interpreter）"
+python3 - <<'PY'
+import pathlib, sys
+base = pathlib.Path("packaging/fpk")
+targets = list((base / "cmd").iterdir())
+targets += [base / "app/skills/fnos-trim/scripts/trim-cli"]
+bad = []
+for p in targets:
+    if not p.is_file():
+        continue
+    raw = p.read_bytes()
+    if b"\r\n" in raw:
+        bad.append(str(p))
+if bad:
+    print("[fail] 以下文件含 CRLF：")
+    for b in bad:
+        print("       ", b)
+    sys.exit(1)
+print(f"[smoke]     {len(targets)} 个脚本均为 LF")
+PY
 
 log "3/5 校验 JSON 文件"
 python3 - <<'PY'
