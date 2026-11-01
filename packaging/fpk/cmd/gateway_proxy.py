@@ -596,6 +596,9 @@ def main() -> int:
         print(f"[gateway-proxy] {die}", file=sys.stderr)
         return 1
 
+    # 自我监测重载：脚本被替换后自动重新 exec
+    threading.Thread(target=_watch_self_and_reload, daemon=True).start()
+
     if args.autostart:
         _ensure_upstream(args.autostart, args.autostart_cwd,
                          host, int(port))
@@ -705,10 +708,49 @@ def _launch_path(hermes_home: str) -> str:
         path = parts.path or "/"
         if parts.query:
             path = f"{path}?{parts.query}"
+        # 凭据在 fragment 里：launch 页面用
+        #   new URLSearchParams(location.hash.slice(1))
+        # 读取（#token=...）。fragment 不会随请求发给服务器，但浏览器
+        # 会在页面里读到 —— 所以重定向时必须原样带上。
+        if parts.fragment:
+            path = f"{path}#{parts.fragment}"
         return path
     except Exception as exc:
         log(f"申请启动链接失败：{exc}")
         return ""
+
+
+def _watch_self_and_reload() -> None:
+    """检测自身脚本是否被替换；变了就重新 exec 自己。
+
+    这个进程与应用同用户运行，外部（SSH 等普通账号）无法直接终止它，
+    于是排障时改完脚本没法生效。自我监测解决了这个问题：改文件即可重载，
+    不必重启整个应用。
+    """
+    import hashlib
+    import time
+
+    me = os.path.abspath(__file__)
+    try:
+        with open(me, "rb") as fh:
+            original = hashlib.sha256(fh.read()).hexdigest()
+    except OSError:
+        return
+
+    while True:
+        time.sleep(3)
+        try:
+            with open(me, "rb") as fh:
+                current = hashlib.sha256(fh.read()).hexdigest()
+        except OSError:
+            continue
+        if current != original:
+            log("检测到脚本已更新，重新加载")
+            try:
+                os.execv(sys.executable, [sys.executable, me] + sys.argv[1:])
+            except Exception as exc:
+                log(f"重新加载失败：{exc}")
+                return
 
 
 def _serve_tcp(host: str, port: int, upstream: tuple[str, int], prefix: str,
