@@ -336,6 +336,104 @@ class ProxyHandler(socketserver.BaseRequestHandler):
         return path or "/"
 
     # ── 响应输出 ──────────────────────────────────────────────────────
+    def _proxy_websocket(self, target: str, headers: dict[str, str],
+                         body: bytes) -> None:
+        """裸 socket 双向转发 WebSocket。
+
+        BaseHTTPRequestHandler 帮我们解析了握手请求，但握手成功之后
+        双方发的是帧流而不是 HTTP，所以这里必须绕开 http.client，
+        直接对接客户端 socket 与上游 socket。
+        """
+        import select as _select
+
+        up_host, up_port = self.server.upstream_host, self.server.upstream_port
+        upstream_origin = f"http://{up_host}:{up_port}"
+
+        lines = [f"GET {target} HTTP/1.1", f"Host: {up_host}:{up_port}"]
+        for key, value in headers.items():
+            low = key.lower()
+            if low in ("host", "content-length"):
+                continue
+            if low == "origin":
+                lines.append(f"Origin: {upstream_origin}")
+                continue
+            if low == "referer":
+                tail = value.split("://", 1)[-1]
+                slash = tail.find("/")
+                rest = tail[slash:] if slash >= 0 else "/"
+                lines.append(f"Referer: {upstream_origin}{rest}")
+                continue
+            lines.append(f"{key}: {value}")
+        handshake = ("\r\n".join(lines) + "\r\n\r\n").encode()
+
+        try:
+            up = socket.create_connection((up_host, up_port), timeout=30)
+        except OSError as exc:
+            log(f"WebSocket 上游连接失败 {up_host}:{up_port}: {exc}")
+            self._error(502, "Bad Gateway")
+            return
+
+        try:
+            up.sendall(handshake)
+            if body:
+                up.sendall(body)
+
+            # 把上游的握手响应（应为 101）原样回给客户端
+            head = b""
+            while b"\r\n\r\n" not in head:
+                chunk = up.recv(4096)
+                if not chunk:
+                    break
+                head += chunk
+            if not head:
+                log("WebSocket 上游未返回握手响应")
+                self._error(502, "Bad Gateway")
+                return
+            self.wfile.write(head)
+            self.wfile.flush()
+
+            # 之后是帧流：双向对拷
+            client = self.connection
+            client.setblocking(False)
+            up.setblocking(False)
+            peers = {client: up, up: client}
+            idle = 0
+            while True:
+                try:
+                    readable, _, errored = _select.select(
+                        [client, up], [], [client, up], 1.0)
+                except OSError:
+                    break
+                if errored:
+                    break
+                if not readable:
+                    idle += 1
+                    # 长时间无数据也维持连接（浏览器的 WS 会有心跳）
+                    if idle > 300:
+                        break
+                    continue
+                idle = 0
+                for src in readable:
+                    try:
+                        data = src.recv(65536)
+                    except (BlockingIOError, InterruptedError):
+                        continue
+                    except OSError:
+                        data = b""
+                    if not data:
+                        return
+                    try:
+                        peers[src].sendall(data)
+                    except OSError:
+                        return
+        except OSError as exc:
+            log(f"WebSocket 转发异常 {target}: {exc}")
+        finally:
+            try:
+                up.close()
+            except OSError:
+                pass
+
     def _send_raw(self, status_line: str, headers: list[tuple[str, str]],
                   payload: bytes) -> None:
         out = [status_line]
@@ -417,6 +515,20 @@ class ProxyHandler(socketserver.BaseRequestHandler):
     def _forward(self, method: str, path: str, version: str,
                  headers: dict[str, str], body: bytes) -> None:
         target = self._strip_prefix(path)
+
+        # WebSocket 升级请求必须走裸 socket 双向转发。
+        # http.client 只会读一个完整的 HTTP 响应就结束，握手成功后
+        # 的双向帧流它扛不住 —— 表现为前端报
+        #   Desktop IPC bridge is unavailable.
+        # 因为 Hermes 的「IPC 桥」就是这条 WS 连接。
+        upgrade = ""
+        for key, value in headers.items():
+            if key.lower() == "upgrade":
+                upgrade = value.strip().lower()
+                break
+        if upgrade == "websocket":
+            self._proxy_websocket(target, headers, body)
+            return
 
         hop = {"connection", "keep-alive", "proxy-authenticate",
                "proxy-authorization", "te", "trailers",
