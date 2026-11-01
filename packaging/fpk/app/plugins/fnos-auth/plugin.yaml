@@ -1,0 +1,14 @@
+name: fnos-auth
+version: 1.0.0
+description: "给多台 fnOS 设备做 OAuth 授权：填 IP/域名 → 生成授权链接与二维码 → 登录后粘贴一次性授权码，令牌写入该设备独立的 trim-cli profile。既是 dashboard 的「fnOS 授权」tab，也提供 fnos_auth_* 工具让 agent 直接调用（列设备、加设备、发起授权、提交授权码、撤销）。"
+author: "Hermes Agent"
+kind: standalone
+platforms:
+  - linux
+provides_tools:
+  - fnos_auth_devices
+  - fnos_auth_add
+  - fnos_auth_start
+  - fnos_auth_submit
+  - fnos_auth_check
+  - fnos_auth_logout

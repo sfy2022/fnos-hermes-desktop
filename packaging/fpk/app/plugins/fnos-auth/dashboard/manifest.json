@@ -1,0 +1,14 @@
+{
+  "name": "fnos-auth",
+  "label": "fnOS 授权",
+  "description": "给多台 fnOS 设备做 OAuth 授权：填 IP/域名 → 生成授权链接或二维码 → 登录后粘贴授权码，令牌落盘供 trim-cli 使用",
+  "icon": "KeyRound",
+  "version": "1.0.0",
+  "tab": {
+    "path": "/fnos-auth",
+    "position": "end"
+  },
+  "entry": "dist/index.js",
+  "css": "dist/style.css",
+  "api": "plugin_api.py"
+}

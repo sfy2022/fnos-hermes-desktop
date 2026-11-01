@@ -168,6 +168,11 @@ dashboard:
   basic_auth:
     username: ${user}
     password_hash: "${pw_hash}"
+
+# 启用内置插件：fnOS 授权面板 + fnos_auth_* 工具
+plugins:
+  enabled:
+    - fnos-auth
 EOF
         chmod 600 "${cfg}" 2>/dev/null || true
         log_msg "已写入 webapp 配置（host=${bind_host} port=${SERVICE_PORT}，basic_auth=$( [ -n "${pw_hash}" ] && echo 已配置 || echo 未配置 ))"
@@ -546,6 +551,33 @@ verify_webapp() {
 # ── 部署内置飞牛 Skill ──────────────────────────────────────────────────
 # Hermes 从 HERMES_HOME/skills 加载技能（上游 get_skills_dir()）。
 # 本应用的 HERMES_HOME 即 TRIM_PKGVAR，所以装到 ${TRIM_PKGVAR}/skills/。
+# ── 部署 fnOS 授权插件 ──────────────────────────────────────────────────
+# 提供 dashboard 的「fnOS 授权」tab 与 fnos_auth_* 工具：在界面里填 IP/域名、
+# 生成授权链接或二维码、粘贴一次性授权码，令牌落到该设备独立的 trim-cli
+# profile。省掉「去 SSH 跑 trim-cli login」这一步。
+#
+# 插件放在 HERMES_HOME/plugins/（上游扫描 home/plugins 与 profiles/*/plugins），
+# 不放源码树 —— 源码树在升级时会被覆盖。
+deploy_fnos_auth_plugin() {
+    local src="${TRIM_APPDEST}/plugins/fnos-auth"
+    local dst="${DATA_DIR}/plugins/fnos-auth"
+
+    if [ ! -d "${src}" ]; then
+        log_msg "未随包内置 fnOS 授权插件，跳过"
+        return 0
+    fi
+
+    mkdir -p "${DATA_DIR}/plugins" 2>/dev/null || true
+    rm -rf "${dst}"
+    if ! cp -r "${src}" "${dst}" 2>/dev/null; then
+        log_msg "复制 fnOS 授权插件失败，跳过（可在插件市场手动安装）"
+        return 0
+    fi
+    # 只读加载即可：Hermes 设了 PYTHONDONTWRITEBYTECODE=1，不会写 __pycache__
+    chmod -R a+rX "${dst}" 2>/dev/null || true
+    log_msg "fnOS 授权插件已部署到 ${dst}"
+}
+
 deploy_fnos_skill() {
     local src="${TRIM_APPDEST}/skills/fnos-trim"
     local dst="${DATA_DIR}/skills/fnos-trim"
@@ -630,6 +662,9 @@ verify_fnos_skill() {
         fi
         log_msg "飞牛 Skill 校验未通过（第 ${i} 次），重新部署"
         deploy_fnos_skill
+
+# fnOS 授权插件：提供界面里的授权面板与 fnos_auth_* 工具
+deploy_fnos_auth_plugin
         sleep 2
     done
     log_msg "警告：飞牛 Skill 未能稳定部署，功能可能不可用"
