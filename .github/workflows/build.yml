@@ -1,7 +1,7 @@
 name: 同步上游并构建
 
 # 触发条件：
-#   - schedule    每日同步上游并构建（UTC 03:17，避开整点高峰）
+#   - schedule    每日同步上游并构建
 #   - workflow_dispatch  手动触发（可指定上游 ref）
 #   - push        打包脚本变更时立即验证构建
 on:
@@ -29,7 +29,6 @@ on:
 permissions:
   contents: write
 
-# 同一时间只跑一个构建，避免并发发布冲突
 concurrency:
   group: fnos-hermes-desktop-build
   cancel-in-progress: false
@@ -43,12 +42,27 @@ jobs:
       - name: 检出本仓库
         uses: actions/checkout@v4
 
+      # 直接下载 Node 26 二进制，不依赖 setup-node——
+      # Gitea 的 action 源与 GitHub 不完全一致，且 Node 26 较新，
+      # setup-node 的版本清单可能尚未收录。直接装最稳。
       - name: 安装 Node.js 26
-        uses: actions/setup-node@v4
-        with:
-          node-version: '26'
-          cache: npm
-          cache-dependency-path: hermes-agent/package-lock.json
+        run: |
+          set -euo pipefail
+          NODE_VER="v26.13.0"
+          ARCH="$(uname -m)"
+          case "${ARCH}" in
+            x86_64)  NODE_ARCH="x64" ;;
+            aarch64) NODE_ARCH="arm64" ;;
+            *) echo "不支持的架构：${ARCH}"; exit 1 ;;
+          esac
+          URL="https://nodejs.org/dist/${NODE_VER}/node-${NODE_VER}-linux-${NODE_ARCH}.tar.xz"
+          echo "下载 ${URL}"
+          curl -fsSL --retry 3 --max-time 300 -o /tmp/node.tar.xz "${URL}"
+          mkdir -p "${HOME}/node"
+          tar xf /tmp/node.tar.xz -C "${HOME}/node" --strip-components=1
+          echo "${HOME}/node/bin" >> "${GITHUB_PATH}"
+          export PATH="${HOME}/node/bin:${PATH}"
+          echo "node: $(node -v)"
 
       - name: 记录环境
         run: |
@@ -70,8 +84,9 @@ jobs:
           ls -la dist/
           cat dist/build-info.json
 
+      # 产物用 v3 上传：Gitea 只支持到 v3，GitHub 同样接受 v3
       - name: 上传构建产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: fnos-hermes-desktop-fpk
           path: dist/
@@ -81,45 +96,46 @@ jobs:
       - name: 发布到 Releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ steps.meta.outputs.version }}
+          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           if [ ! -f dist/build-info.json ]; then
             echo "没有 build-info，跳过发布"
             exit 0
           fi
+
           VERSION=$(python3 -c "import json;print(json.load(open('dist/build-info.json'))['version'])")
           SHA=$(python3 -c "import json;print(json.load(open('dist/build-info.json'))['upstream_sha'])")
           TAG="v${VERSION}"
 
-          # tag 已存在则只补传附件（支持重跑）
-          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
-            echo "Tag ${TAG} 已存在，更新附件"
-            gh release upload "${TAG}" dist/hermes-desktop.fpk dist/build-info.json --clobber
-          else
-            echo "创建 Release ${TAG}"
+          SHA256=$(sha256sum dist/hermes-desktop.fpk | cut -d' ' -f1)
+          {
+            echo "Hermes 官方 Desktop 工作区的飞牛原生版。"
+            echo
+            echo "上游仓库：NousResearch/hermes-agent"
+            echo "上游 commit：${SHA}"
+            echo
+            echo "安装方式：飞牛桌面 → 应用中心 → 手动安装 → 选择 hermes-desktop.fpk"
+            echo
+            echo "构建信息："
+            echo "- 版本：${VERSION}"
+            echo "- SHA256：${SHA256}"
+          } > release-notes.md
+
+          # 打 tag（已存在则复用）
+          if ! git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
             git tag -a "${TAG}" -m "Hermes ${VERSION} (upstream ${SHA})"
             git push origin "refs/tags/${TAG}"
-
-            # notes 走文件，避免 YAML 多行标量里的特殊字符干扰解析
-            SHA256=$(sha256sum dist/hermes-desktop.fpk | cut -d' ' -f1)
-            {
-              echo "Hermes 官方 Desktop 工作区的飞牛原生版。"
-              echo
-              echo "上游仓库：NousResearch/hermes-agent"
-              echo "上游 commit：${SHA}"
-              echo
-              echo "安装方式：飞牛桌面 → 应用中心 → 手动安装 → 选择 hermes-desktop.fpk"
-              echo
-              echo "构建信息："
-              echo "- 版本：${VERSION}"
-              echo "- SHA256：${SHA256}"
-            } > release-notes.md
-
-            gh release create "${TAG}" \
-              dist/hermes-desktop.fpk \
-              dist/build-info.json \
-              --title "Hermes Desktop for fnOS ${VERSION}" \
-              --notes-file release-notes.md \
-              --verify-tag
           fi
+
+          # 仓库标识：Gitea 与 GitHub 都提供 GITHUB_REPOSITORY
+          REPO_FULL="${GITHUB_REPOSITORY:-<owner>/<repo>}"
+
+          # 发布逻辑放在独立脚本里，避免 YAML 嵌套引号踩坑
+          python3 scripts/publish_release.py \
+            --repo "${REPO_FULL}" \
+            --tag "${TAG}" \
+            --title "Hermes Desktop for fnOS ${VERSION}" \
+            --notes-file release-notes.md \
+            --assets dist/hermes-desktop.fpk dist/build-info.json

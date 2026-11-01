@@ -30,7 +30,6 @@ jobs:
           REMOTE_SHA=$(git ls-remote https://github.com/NousResearch/hermes-agent.git refs/heads/main | cut -f1)
           echo "上游最新 commit: ${REMOTE_SHA}"
 
-          # 记录上次构建用的上游 commit
           if [ -f .upstream-sha ]; then
             KNOWN=$(cat .upstream-sha)
           else
@@ -45,18 +44,35 @@ jobs:
           fi
           echo "sha=${REMOTE_SHA}" >> "$GITHUB_OUTPUT"
 
+      # 平台自适应触发：Gitea 用 dispatch API，GitHub 用 gh CLI
       - name: 触发构建
         if: steps.compare.outputs.changed == 'true'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'build.yml',
-              ref: 'main'
-            })
-            core.info('已触发 build.yml')
+        env:
+          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          REPO_FULL="${GITHUB_REPOSITORY:-<owner>/<repo>}"
+          OWNER="${REPO_FULL%%/*}"
+          REPO_NAME="${REPO_FULL##*/}"
+
+          if [ -n "${GITEA_TOKEN}" ] || echo "${GITHUB_SERVER_URL:-}" | grep -q "<gitea-host>"; then
+            echo ">>> Gitea：触发 build.yml"
+            if [ -z "${GITEA_TOKEN}" ]; then
+              echo "缺少 GITEA_TOKEN，无法触发"
+              exit 0
+            fi
+            API="${GITHUB_API_URL:-https://<gitea-host>/api/v1}"
+            curl -s -H "Authorization: token ${GITEA_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -X POST "${API}/repos/${OWNER}/${REPO_NAME}/actions/workflows/build.yml/dispatches" \
+              -d '{"ref":"main"}' >/dev/null
+            echo "✓ 已触发"
+          else
+            echo ">>> GitHub：触发 build.yml"
+            gh workflow run build.yml --ref main || echo "触发失败（可稍后手动运行）"
+          fi
 
   record:
     name: 记录本次 commit
@@ -73,8 +89,8 @@ jobs:
       - name: 提交
         run: |
           echo "${{ needs.check.outputs.upstream_sha }}" > .upstream-sha
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "gitea-actions[bot]"
+          git config user.email "gitea-actions[bot]@users.noreply.github.com"
           git add .upstream-sha
           git commit -m "chore: 记录上游 commit ${{ needs.check.outputs.upstream_sha }}" || echo "无变更"
           git push || echo "推送失败（下次重试）"
