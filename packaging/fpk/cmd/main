@@ -22,6 +22,17 @@ SRC_DIR="${DATA_DIR}/src"
 WEBAPP_DIST="${TRIM_APPDEST}/webapp"
 
 SERVICE_PORT="${TRIM_SERVICE_PORT:-9120}"
+# fnOS 统一网关接入：应用在 Unix Socket 上提供 HTTP 服务，
+# 由 fnOS 网关按 gatewayPrefix 转发，实现桌面图标内嵌窗口打开。
+GATEWAY_SOCKET="${TRIM_APPDEST}/app.sock"
+GATEWAY_PREFIX="/app/hermes-desktop"
+# 网关适配层脚本位置。优先用数据目录下的副本（可热替换，便于排障时
+# 直接改脚本而不必重装）；没有则用随包分发的 cmd/ 下的版本。
+GATEWAY_PROXY="${DATA_DIR}/gateway_proxy.py"
+if [ ! -f "${GATEWAY_PROXY}" ]; then
+    GATEWAY_PROXY="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/gateway_proxy.py"
+fi
+GATEWAY_PID_FILE="${DATA_DIR}/gateway-proxy.pid"
 case "${SERVICE_PORT}" in
     ''|*[!0-9]*) SERVICE_PORT="9120" ;;
 esac
@@ -132,7 +143,7 @@ ensure_webapp_config() {
 # ── 飞牛版 Hermes Desktop（兜底生成） ────────────────────
 webapp:
   enabled: true
-  host: 0.0.0.0
+  host: 127.0.0.1
   port: ${SERVICE_PORT}
 
 dashboard:
@@ -178,6 +189,70 @@ heal_fnos_skill() {
     chmod +x "${SKILL_DIR}/scripts/trim-cli" 2>/dev/null || true
     log_msg "飞牛 Skill 已补回"
     return 0
+}
+
+# 启动 fnOS 统一网关适配层。
+#
+# 为什么需要：桌面内嵌窗口要求 iframe 与飞牛桌面同源（:5666），
+# 否则 SameSite=lax 的会话 Cookie 不会发送，登录状态无法维持。
+# fnOS 网关只把 gatewayPrefix 转发到应用目录的 Unix Socket，
+# 因此应用要提供一个 HTTP-over-Unix-Socket 的转发层。
+start_gateway_proxy() {
+    if [ ! -f "${GATEWAY_PROXY}" ]; then
+        log_msg "网关代理脚本缺失，跳过（${GATEWAY_PROXY}）"
+        return 1
+    fi
+
+    if [ -f "${GATEWAY_PID_FILE}" ]; then
+        local gpid
+        gpid="$(head -n 1 "${GATEWAY_PID_FILE}" 2>/dev/null | tr -d '[:space:]')"
+        if [ -n "${gpid}" ] && check_process "${gpid}"; then
+            log_msg "网关代理已在运行（PID=${gpid}）"
+            return 0
+        fi
+        rm -f "${GATEWAY_PID_FILE}"
+    fi
+
+    rm -f "${GATEWAY_SOCKET}" 2>/dev/null || true
+    mkdir -p "$(dirname "${GATEWAY_SOCKET}")" 2>/dev/null || true
+
+    local py="${VENV_DIR}/bin/python3"
+    [ -x "${py}" ] || py="$(command -v python3 2>/dev/null)"
+    if [ -z "${py}" ] || [ ! -x "${py}" ]; then
+        log_msg "找不到可用的 python3，跳过网关代理"
+        return 1
+    fi
+
+    log_msg "启动 fnOS 网关适配层（socket=${GATEWAY_SOCKET} → 127.0.0.1:${SERVICE_PORT}）"
+    nohup "${py}" "${GATEWAY_PROXY}" \
+        --socket "${GATEWAY_SOCKET}" \
+        --upstream "127.0.0.1:${SERVICE_PORT}" \
+        --prefix "${GATEWAY_PREFIX}" \
+        >> "${DATA_DIR}/gateway-proxy.log" 2>&1 &
+
+    local gpid=$!
+    printf "%s" "${gpid}" > "${GATEWAY_PID_FILE}"
+
+    local waited=0
+    while [ "${waited}" -lt 15 ]; do
+        if [ -S "${GATEWAY_SOCKET}" ]; then
+            log_msg "网关适配层就绪（${GATEWAY_SOCKET}）"
+            return 0
+        fi
+        if ! check_process "${gpid}"; then
+            log_msg "网关适配层启动失败，日志尾部："
+            tail -8 "${DATA_DIR}/gateway-proxy.log" 2>/dev/null | while IFS= read -r line; do
+                log_msg "  ${line}"
+            done
+            rm -f "${GATEWAY_PID_FILE}"
+            return 1
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    log_msg "网关适配层启动超时（socket 未出现）"
+    return 1
 }
 
 start_process() {
@@ -243,6 +318,7 @@ start_process() {
         fi
         if is_port_in_use "${SERVICE_PORT}"; then
             log_msg "服务就绪，端口 ${SERVICE_PORT} 已监听"
+            start_gateway_proxy
             return 0
         fi
         sleep 1
@@ -250,6 +326,7 @@ start_process() {
     done
 
     log_msg "等待 ${waited}s 后未确认端口监听，但进程存活，继续运行"
+    start_gateway_proxy
     return 0
 }
 
@@ -278,11 +355,25 @@ stop_process() {
     # "hermes" 与 "gateway" 之间隔着 runpy 代码，那样匹配不到，
     # 会留下进程继续占用 9120 端口。改用本应用 venv 路径匹配，
     # 带路径前缀也不会误杀用户手动跑的其它 Hermes 实例。
+    # 网关适配层也要停，否则会一直占着 app.sock
+    if [ -f "${GATEWAY_PID_FILE}" ]; then
+        local gpid
+        gpid="$(head -n 1 "${GATEWAY_PID_FILE}" 2>/dev/null | tr -d '[:space:]')"
+        if [ -n "${gpid}" ] && check_process "${gpid}"; then
+            kill -TERM "${gpid}" 2>/dev/null || true
+            sleep 1
+            kill -KILL "${gpid}" 2>/dev/null || true
+        fi
+        rm -f "${GATEWAY_PID_FILE}" 2>/dev/null || true
+    fi
+    pkill -TERM -f "gateway_proxy.py" 2>/dev/null || true
     pkill -TERM -f "${DATA_DIR}/venv/bin" 2>/dev/null || true
     pkill -TERM -f "${DATA_DIR}.*gateway" 2>/dev/null || true
     sleep 1
+    pkill -KILL -f "gateway_proxy.py" 2>/dev/null || true
     pkill -KILL -f "${DATA_DIR}/venv/bin" 2>/dev/null || true
     pkill -KILL -f "${DATA_DIR}.*gateway" 2>/dev/null || true
+    rm -f "${GATEWAY_SOCKET}" 2>/dev/null || true
     log_msg "已停止"
     return 0
 }
