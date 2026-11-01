@@ -137,6 +137,47 @@ BRIDGE_JS = r"""
     }
   } catch (_) {}
 
+  // ── 顶层跳转：location.href / assign / replace ─────────────────────
+  // 登录成功后前端会做 location.href = "/" 这类跳转。在 iframe 里绝对路径
+  // 会被解析成 fnOS 网关的根路径，表现为「登录后跳到飞牛桌面」。
+  // 这里把根相对路径改写成带前缀的。
+  function mapLocation(value) {
+    if (typeof value !== "string") return value;
+    if (value.charAt(0) !== "/") return value;
+    if (value.charAt(1) === "/") return value;
+    var pathname = value.split("?")[0].split("#")[0];
+    if (pathname === "/" || isAppPath(pathname)) return prefix + value;
+    return value;
+  }
+
+  try {
+    var loc = window.location;
+    ["assign", "replace"].forEach(function (name) {
+      var original = loc[name];
+      if (typeof original !== "function") return;
+      var wrapped = function (url) {
+        var m = mapLocation(url);
+        return original.call(this, m === null || m === undefined ? url : m);
+      };
+      try { loc[name] = wrapped; } catch (_) {}
+    });
+  } catch (_) {}
+
+  // history.pushState / replaceState 也可能带绝对路径
+  try {
+    ["pushState", "replaceState"].forEach(function (name) {
+      var original = history[name];
+      if (typeof original !== "function") return;
+      history[name] = function (state, title, url) {
+        if (typeof url === "string") {
+          var m = mapLocation(url);
+          if (m) url = m;
+        }
+        return original.call(this, state, title, url);
+      };
+    });
+  } catch (_) {}
+
   // ── 动态插入的 <img>/<script> 的绝对 src ────────────────────────────
   try {
     var nativeSetAttribute = Element.prototype.setAttribute;

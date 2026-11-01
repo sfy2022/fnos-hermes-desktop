@@ -132,6 +132,45 @@ ensure_webapp_config() {
     [ -f "${cfg}" ] || printf '# Hermes Agent 配置\n' > "${cfg}"
 
     if grep -q "^webapp:" "${cfg}" 2>/dev/null; then
+        # 已有 webapp 段：纠正 host 与 public_url。
+        # 上游判定：should_require_dashboard_auth(host, hosts)
+        #   = should_require_auth(host) or public_hosts_engage_gate(hosts)
+        #   should_require_auth(host) = host not in _LOOPBACK_HOST_VALUES
+        # 绑在回环地址且 public_url 为空时，界面不需要登录（与官方桌面版一致）；
+        # 绑到 0.0.0.0 会触发认证 gate，多出登录页，还把服务暴露在局域网。
+        if grep -qE "^[[:space:]]*host:[[:space:]]*0\.0\.0\.0" "${cfg}" 2>/dev/null; then
+            sed -i "s/^\([[:space:]]*host:[[:space:]]*\)0\.0\.0\.0/\1127.0.0.1/" "${cfg}" 2>/dev/null || true
+            log_msg "config.yaml 的 webapp.host 已纠正为 127.0.0.1（回环监听，无需登录）"
+        fi
+        if grep -qE '^[[:space:]]*public_url:[[:space:]]*"?[^"[:space:]]' "${cfg}" 2>/dev/null; then
+            sed -i "s/^\([[:space:]]*public_url:[[:space:]]*\).*/\1\"\"/" "${cfg}" 2>/dev/null || true
+            log_msg "config.yaml 的 webapp.public_url 已清空"
+        fi
+        # 清理遗留的 dashboard.basic_auth —— 它是 Dashboard 的认证机制，
+        # 与 Webapp 无关，留着还会留下明文密码。
+        if grep -q "^[[:space:]]*basic_auth:" "${cfg}" 2>/dev/null; then
+            python3 - "${cfg}" <<'PYEOF' 2>/dev/null || true
+import re, sys
+path = sys.argv[1]
+try:
+    lines = open(path, encoding="utf-8").read().splitlines(keepends=True)
+    out = []
+    skip = False
+    for line in lines:
+        if skip:
+            if line.strip() and (len(line) - len(line.lstrip())) > 2:
+                continue
+            skip = False
+        if re.match(r"^[ \t]*basic_auth:[ \t]*$", line.rstrip("\n")):
+            skip = True
+            continue
+        out.append(line)
+    open(path, "w", encoding="utf-8", newline="\n").write("".join(out))
+except Exception:
+    pass
+PYEOF
+            log_msg "已清理遗留的 dashboard.basic_auth（Webapp 不需要登录）"
+        fi
         log_msg "config.yaml 已含 webapp 配置"
         return 0
     fi

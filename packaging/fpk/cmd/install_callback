@@ -105,18 +105,20 @@ sync_ui_port() {
 # 向导变量（无 TRIM_ 前缀）在安装时以环境变量形式注入
 apply_wizard_settings() {
     local cfg="${DATA_DIR}/config.yaml"
-    local user="${wizard_web_user:-admin}"
-    local pass="${wizard_web_pass:-}"
-
-    if [ -z "${pass}" ]; then
-        pass="$(gen_password)"
-        log_msg "未设置密码，已生成随机密码"
-    fi
 
     mkdir -p "${DATA_DIR}" 2>/dev/null || true
     [ -f "${cfg}" ] || printf '# Hermes Agent 配置\n' > "${cfg}"
 
-    # 只在缺失时追加，避免重复安装产生重复段落
+    # 只在缺失时追加，避免重复安装产生重复段落。
+    #
+    # 不写 dashboard.basic_auth：那是 Dashboard（多用户 web 控制台）的认证机制，
+    # 与 Webapp 形态无关。Webapp 是否需要登录由上游判定：
+    #     should_require_dashboard_auth(host, hosts)
+    #         = should_require_auth(host) or public_hosts_engage_gate(hosts)
+    #     should_require_auth(host) = host not in _LOOPBACK_HOST_VALUES
+    # 也就是说 —— 只要 webapp 绑在回环地址、且 public_url 为空（都指向回环），
+    # 就完全不需要登录，与官方桌面版体验一致。
+    # 绑到 0.0.0.0 会触发认证 gate，界面上就会多出登录页。
     if ! grep -q "^webapp:" "${cfg}" 2>/dev/null; then
         cat >> "${cfg}" <<EOF
 
@@ -125,24 +127,60 @@ webapp:
   enabled: true
   host: 127.0.0.1
   port: ${SERVICE_PORT}
-
-dashboard:
-  basic_auth:
-    username: ${user}
-    password: "${pass}"
+  public_url: ""
 EOF
         chmod 600 "${cfg}" 2>/dev/null || true
-        log_msg "已写入 webapp 配置（host=127.0.0.1 port=${SERVICE_PORT} user=${user}）"
+        log_msg "已写入 webapp 配置（host=127.0.0.1 port=${SERVICE_PORT}）"
     else
-        # 已有 webapp 段：若端口与选定端口不一致（端口冲突后顺延的情况），同步更新
+        # 已有 webapp 段：逐项纠正。
+        # 端口：与选定端口不一致时同步（端口冲突后顺延的情况）
         local cfg_port
         cfg_port="$(grep -E "^[[:space:]]*port:[[:space:]]*[0-9]+" "${cfg}" 2>/dev/null | head -n 1 | grep -oE '[0-9]+')"
         if [ -n "${cfg_port}" ] && [ "${cfg_port}" != "${SERVICE_PORT}" ]; then
             sed -i "s/^\([[:space:]]*port:[[:space:]]*\)[0-9]\{1,5\}/\1${SERVICE_PORT}/" "${cfg}" 2>/dev/null || true
             log_msg "config.yaml 端口已从 ${cfg_port} 更新为 ${SERVICE_PORT}"
-        else
-            log_msg "config.yaml 已含 webapp 段，保留原配置"
         fi
+
+        # host：必须纠正为回环地址。旧版本写的是 0.0.0.0，会触发上游的
+        # 认证 gate，界面上多出登录页；也把服务暴露在局域网上。
+        if grep -qE "^[[:space:]]*host:[[:space:]]*0\.0\.0\.0" "${cfg}" 2>/dev/null; then
+            sed -i "s/^\([[:space:]]*host:[[:space:]]*\)0\.0\.0\.0/\1127.0.0.1/" "${cfg}" 2>/dev/null || true
+            log_msg "config.yaml 的 webapp.host 已从 0.0.0.0 纠正为 127.0.0.1（回环监听，无需登录）"
+        fi
+
+        # public_url：非回环的 public_url 也会触发 gate
+        if grep -qE '^[[:space:]]*public_url:[[:space:]]*"?[^"[:space:]]' "${cfg}" 2>/dev/null; then
+            sed -i "s/^\([[:space:]]*public_url:[[:space:]]*\).*/\1\"\"/" "${cfg}" 2>/dev/null || true
+            log_msg "config.yaml 的 webapp.public_url 已清空（避免触发认证 gate）"
+        fi
+    fi
+
+    # 清理遗留的 dashboard.basic_auth。
+    # 它是 Dashboard（多用户 web 控制台）的认证机制，与 Webapp 形态无关；
+    # 留着会让用户以为需要账号密码，也会在配置里留下明文密码。
+    if grep -q "^[[:space:]]*basic_auth:" "${cfg}" 2>/dev/null; then
+        python3 - "${cfg}" <<'PYEOF' 2>/dev/null || true
+import re, sys
+path = sys.argv[1]
+try:
+    lines = open(path, encoding="utf-8").read().splitlines(keepends=True)
+    out = []
+    skip = False
+    for line in lines:
+        if skip:
+            # 比 basic_auth 缩进更深的行属于同一块，一并删除
+            if line.strip() and (len(line) - len(line.lstrip())) > 2:
+                continue
+            skip = False
+        if re.match(r"^[ \t]*basic_auth:[ \t]*$", line.rstrip("\n")):
+            skip = True
+            continue
+        out.append(line)
+    open(path, "w", encoding="utf-8", newline="\n").write("".join(out))
+except Exception:
+    pass
+PYEOF
+        log_msg "已清理遗留的 dashboard.basic_auth（Webapp 不需要登录）"
     fi
 
     # 把访问信息单独存一份，便于用户查阅
@@ -150,13 +188,14 @@ EOF
     cat > "${info}" <<EOF
 Hermes Desktop（飞牛版）访问信息
 ================================
-地址:     http://<本机IP>:${SERVICE_PORT}
-用户名:   ${user}
-密码:     ${pass}
+入口:     飞牛桌面上的「Hermes Desktop」图标（点击后在内嵌窗口打开）
+免登录:   是。复用飞牛自身的登录态，无需额外账号密码。
 
-提示：
-- 该地址在局域网内可访问，登录后等同于授予本机命令执行权限，请勿公网暴露。
-- 密码可通过编辑 ${cfg} 中的 dashboard.basic_auth 修改，改后需重启应用。
+说明：
+- Hermes 服务只监听本机回环地址 127.0.0.1:${SERVICE_PORT}，不对局域网暴露端口。
+- 对外访问经由飞牛统一网关（${GATEWAY_PREFIX:-/app/hermes-desktop}），
+  鉴权由飞牛负责。
+- 如需修改监听配置，编辑 ${cfg} 中的 webapp 段，改后需重启应用。
 EOF
     chmod 600 "${info}" 2>/dev/null || true
     log_msg "访问信息已写入 ${info}"
