@@ -48,6 +48,9 @@ from __future__ import annotations
 
 import argparse
 import http.client
+import json
+import os
+from urllib.parse import urlsplit
 import http.server
 import os
 import re
@@ -445,6 +448,11 @@ class ProxyHandler(socketserver.BaseRequestHandler):
                 return
             method, path, version, headers, body = parsed
 
+            # 入口改写：Hermes 的 Webapp 需要一次性启动链接完成配对，
+            # 直接访问 / 会看到「Run hermes webapp on this computer...」。
+            if self._maybe_redirect(path):
+                return
+
             # WebSocket 升级：Hermes 的实时通道依赖它，需原样透传。
             if (headers.get("Upgrade", "").lower() == "websocket"
                     or "upgrade" in headers.get("Connection", "").lower()):
@@ -460,6 +468,37 @@ class ProxyHandler(socketserver.BaseRequestHandler):
                 self._error(500, "Internal Server Error")
             except Exception:
                 pass
+
+    def _maybe_redirect(self, path: str) -> bool:
+        """把首页请求改写成一次性启动链接，返回 True 表示已响应。
+
+        Hermes 的 Webapp 用一次性启动链接完成配对：浏览器先打开
+        /webapp/launch?token=... ，该页面把凭据写进 sessionStorage，
+        之后才能正常使用。直接访问 / 会看到
+        「Run hermes webapp on this computer to sign this browser in.」。
+
+        控制 socket 只接受同 OS 用户，所以由本层（与应用同用户）代取链接，
+        再用相对路径重定向浏览器过去，保持同源。
+        """
+        clean = path.split("?")[0]
+        prefix = getattr(self.server, "prefix", "") or ""
+        stripped = clean[len(prefix):] if prefix and clean.startswith(prefix) else clean
+        if stripped != "/":
+            return False
+
+        home = getattr(self.server, "hermes_home", "") or ""
+        launch = _launch_path(home)
+        if not launch:
+            return False
+
+        target = f"{prefix}{launch}"
+        self._send_raw("HTTP/1.1 302 Found", [
+            ("Location", target),
+            ("Content-Length", "0"),
+            ("Cache-Control", "no-store"),
+        ], b"")
+        log(f"首页请求改写到一次性启动链接：{target}")
+        return True
 
     def _handle_upgrade(self, path: str, headers: dict[str, str]) -> None:
         """WebSocket 升级：建立到上游的 TCP 连接后双向转发裸字节。"""
@@ -515,10 +554,13 @@ class ProxyUnixServer(ThreadingUnixHTTPServer):
     upstream_host: str
     upstream_port: int
     socket_path: str
+    hermes_home: str = ""
 
 
-def serve(socket_path: str, upstream: tuple[str, int], prefix: str) -> int:
+def serve(socket_path: str, upstream: tuple[str, int], prefix: str,
+          hermes_home: str = "") -> int:
     server = ProxyUnixServer(socket_path, ProxyHandler, prefix, upstream)
+    server.hermes_home = hermes_home
     log(f"监听 {socket_path}")
     log(f"上游 {upstream[0]}:{upstream[1]}  前缀 {prefix or '(无)'}")
     try:
@@ -536,6 +578,8 @@ def main() -> int:
     ap.add_argument("--socket", required=True, help="Unix Socket 路径")
     ap.add_argument("--upstream", required=True, help="上游 host:port")
     ap.add_argument("--prefix", default="", help="要剥离的路径前缀")
+    ap.add_argument("--hermes-home", default="",
+                    help="Hermes 的 home 目录（含 gateway.sock），用于申请一次性启动链接")
     ap.add_argument("--autostart", default="",
                     help="上游未就绪时用这条命令拉起它（如 hermes gateway run）")
     ap.add_argument("--autostart-cwd", default="",
@@ -564,13 +608,15 @@ def main() -> int:
             return 1
         tcp_thread = threading.Thread(
             target=_serve_tcp,
-            args=(tcp_host, int(tcp_port), (host, int(port)), args.prefix),
+            args=(tcp_host, int(tcp_port), (host, int(port)), args.prefix,
+                  args.hermes_home),
             daemon=True)
         tcp_thread.start()
         log(f"额外 TCP 监听 {tcp_host}:{tcp_port}（浏览器直连，免登录）")
 
     try:
-        return serve(args.socket, (host, int(port)), args.prefix)
+        return serve(args.socket, (host, int(port)), args.prefix,
+                     args.hermes_home)
     finally:
         pass
 
@@ -614,7 +660,56 @@ def _ensure_upstream(command: str, cwd: str, host: str, port: int) -> None:
     log("等待上游超时")
 
 
-def _serve_tcp(host: str, port: int, upstream: tuple[str, int], prefix: str) -> None:
+def _launch_path(hermes_home: str) -> str:
+    """向 gateway 控制 socket 申请一次性启动链接，返回其 path+query。
+
+    Hermes 的 Webapp 用「一次性启动链接」完成配对：
+      hermes webapp → 通过控制 socket 取 link → 浏览器打开 link
+      → /webapp/launch 页面把凭据写进 sessionStorage → 之后正常使用
+    直接访问 / 会看到「Run hermes webapp on this computer to sign this
+    browser in.」，因为那个标签页还没有凭据。
+
+    控制 socket 只接受同 OS 用户（SO_PEERCRED），而适配层与应用同用户，
+    因此由适配层代取。注意返回的 url 指向 127.0.0.1:9120，浏览器访问不到，
+    这里只取它的 path+query，由本层用相对路径重定向回去，保持同源。
+    """
+    if not hermes_home:
+        return ""
+    sock_path = os.path.join(hermes_home, "gateway.sock")
+    if not os.path.exists(sock_path):
+        return ""
+    try:
+        peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        peer.settimeout(5)
+        peer.connect(sock_path)
+        peer.sendall(json.dumps({
+            "protocol": 1, "id": 1, "verb": "webapp-launch", "params": {},
+        }).encode() + b"\n")
+        data = bytearray()
+        while b"\n" not in data:
+            chunk = peer.recv(4096)
+            if not chunk:
+                break
+            data.extend(chunk)
+        peer.close()
+        resp = json.loads(bytes(data).split(b"\n", 1)[0].decode("utf-8", "replace"))
+        if not resp.get("ok"):
+            return ""
+        url = (resp.get("result") or {}).get("url") or ""
+        if not url:
+            return ""
+        parts = urlsplit(url)
+        path = parts.path or "/"
+        if parts.query:
+            path = f"{path}?{parts.query}"
+        return path
+    except Exception as exc:
+        log(f"申请启动链接失败：{exc}")
+        return ""
+
+
+def _serve_tcp(host: str, port: int, upstream: tuple[str, int], prefix: str,
+               hermes_home: str = "") -> None:
     """在 TCP 上提供同样的 HTTP 转发（供浏览器直接访问）。
 
     与 Unix Socket 通道的差别只有一处：Host 头固定为回环地址，
@@ -673,6 +768,19 @@ def _serve_tcp(host: str, port: int, upstream: tuple[str, int], prefix: str) -> 
                 stripped = path[len(prefix):] if prefix and path.startswith(prefix) else path
                 if not stripped.startswith("/"):
                     stripped = "/" + stripped
+
+                # 与 socket 通道一致：首页请求改写成一次性启动链接
+                if stripped == "/":
+                    link = _launch_path(hermes_home)
+                    if link:
+                        target = f"{prefix}{link}"
+                        self.send_response(302)
+                        self.send_header("Location", target)
+                        self.send_header("Content-Length", "0")
+                        self.send_header("Cache-Control", "no-store")
+                        self.end_headers()
+                        log(f"首页请求改写到一次性启动链接：{target}")
+                        return
 
                 up = socket.create_connection((up_host, up_port), timeout=60)
                 lines = [f"{self.command} {stripped}{query} HTTP/1.1",
