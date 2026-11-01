@@ -344,3 +344,90 @@ packaging/fpk/cmd/* text eol=lf
   直接写多行标量会被 `:` 等字符干扰解析
 - 上游 `pyproject.toml` 的 `version = "0.0.0"`（构建期占位），
   真实版本只在 git tag 上 → 必须走 API 或指定 tag ref
+
+---
+
+## 附录二：内置飞牛官方 Skill
+
+### 决策结论
+
+**内置，但只内置能自动化的部分。** 三部分分别处理：
+
+| 组成 | 大小 | 处理 |
+|---|---|---|
+| 知识文档（SKILL.md + entries + reference） | ~500 KB | 内置 |
+| trim-cli 二进制（linux-x64 / arm64） | 7.3 / 6.2 MB | 内置（安装时按架构裁剪） |
+| OAuth 授权 | — | **不可内置**，必须用户交互 |
+
+### 实测依据
+
+在 NAS 上实测 trim-cli（官方 V2 版，含 2FA/RSA 支持）：
+
+```
+$ trim-cli --help
+Commands: app baidu-netdisk docker download file media photos
+          diagnostic-log logger login logout monitor network power
+          raw storage system user +ls +search +status
+
+$ trim-cli +status
+Error: failed to get system info from localhost:5666:
+       saved proxy session is required; run login first
+
+$ trim-cli login --no-open
+Open this URL to authorize trim-cli:
+http://localhost:5666/signin?client_id=YJNMPJUGA9&scope=trim.user.all ...
+         &code_challenge_method=S256&device_id=trim-cli-...
+```
+
+结论：
+- trim-cli **自动发现本机 fnOS**（localhost:5666），无需配置地址
+- 模块齐全，覆盖 NAS 全部管理能力
+- 论坛曾报告的「不兼容 2FA」问题在 V2 版已修复（本机 skill 的 oauth.md 明确写了 2FA/TOTP 支持）
+
+### 落点
+
+上游源码依据（`hermes_constants.py`）：
+
+```python
+def get_skills_dir() -> Path:
+    """Return the path to the skills directory under HERMES_HOME."""
+    return get_hermes_home() / "skills"
+```
+
+本应用 `HERMES_HOME = TRIM_PKGVAR`，故 Skill 落在应用数据目录，
+卸载保留、重装免重新授权。
+
+### 踩坑：postinstall 覆盖竞态
+
+**现象**：首次安装后 `hermes skills list` 只有 builtin，看不到 fnos。
+
+**根因**：editable 安装的 `postinstall` 钩子会在安装结束后铺开 Hermes 内置技能
+（`skills/apple`、`skills/creative` 等 39 个），**覆盖**刚部署到
+`HERMES_HOME/skills` 的 `fnos-trim`。
+
+**修复（三重保险）**：
+
+1. `install_callback` 增加 `verify_fnos_skill`：部署后校验 `SKILL.md` + `bin/` +
+   `scripts/trim-cli` 是否在位，不在则重新部署（最多 3 次，每次间隔 2s）
+2. `cmd/main` 增加 `heal_fnos_skill`：启动时若发现 Skill 缺失，从只读的安装目录
+   （`TRIM_APPDEST/skills/fnos-trim`）补回
+3. `start_process` 在启动前调用 `heal_fnos_skill`
+
+**实测**（模拟覆盖后）：
+
+```
+[3] 校验并自愈 → 校验未通过 → 重新部署 → 校验通过 → ✓ 已恢复
+[4] 启动自愈   → 飞牛 Skill 缺失，从安装目录补回 → ✓ 启动自愈生效
+[5] Hermes 技能发现 → fnos │ local │ local │ enabled
+                    0 hub-installed, 39 builtin, 1 local — 40 enabled
+```
+
+### 内置后体积
+
+| 项 | 大小 |
+|---|---|
+| 渲染层（webapp） | 47 MB / 1081 文件 |
+| 飞牛 Skill | 14 MB / 40 文件（含两个架构二进制） |
+| 打包后 fpk | 22.9 MB |
+
+安装时按架构裁剪二进制，实际占用约 7.3 MB（x86_64）。

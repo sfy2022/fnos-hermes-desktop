@@ -40,8 +40,30 @@ Hermes 官方桌面端（Electron）的渲染层有两套构建产物：
 - **终端栏**、**Git 审阅**
 - **消息网关**：微信 / QQ / 飞书 / Telegram / Discord / Slack 等
 - **MCP 集成**、**持久记忆**
+- **内置飞牛官方 Skill**：装完即可操控本机 fnOS（文件、Docker、应用中心、存储、监控…）
 
 与原生 CLI / Desktop / 网关共享同一会话与队列。
+
+### 内置飞牛 Skill
+
+本应用内置**飞牛官方 fnOS Skill**（trim-cli + 知识文档），装完 Agent 就具备操作
+本机 NAS 的能力：文件管理、Docker 控制、应用中心（查询/安装/启停/卸载）、
+存储与 RAID、相册与媒体库、日志与监控、网络与电源、用户与权限、下载任务。
+
+**需要一次 OAuth 授权**（trim-cli 使用 Authorization Code + PKCE，Agent 不能代你确认）：
+
+```bash
+/var/apps/hermes-desktop/var/skills/fnos-trim/scripts/trim-cli login --no-open
+```
+
+命令会打印一个 `http://<NAS_IP>:5666/signin?...` 链接，在浏览器打开并确认授权，
+把返回的授权码粘贴回命令提示即可。授权状态可用
+`cmd/main setup-fnos` 查看。
+
+授权 token 存在应用数据目录（`~/.config/trim-cli/`），卸载保留、重装免重新授权。
+
+> ⚠️ 授权后 Agent 等同于拥有你的 fnOS 账号权限。请遵循最小权限原则，
+> 只勾选真正需要的模块（scope 按模块申请）。
 
 ### 相对 Electron 少了什么（浏览器形态的固有限制）
 
