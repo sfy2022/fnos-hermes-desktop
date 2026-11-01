@@ -28,7 +28,12 @@ WEBAPP_DIST="${TRIM_APPDEST}/webapp"
 # fnOS 网关按 manifest 的 gatewaySocket 在 TRIM_APPDEST 下找 socket。
 GATEWAY_SOCKET="${TRIM_APPDEST}/app.sock"
 GATEWAY_PREFIX="/app/hermes-desktop"
-GATEWAY_PROXY="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/gateway_proxy.py"
+# 网关代理脚本位置。优先用数据目录下的副本（可热替换，便于排障时
+# 直接改脚本而不必重装）；没有则用随包分发的 cmd/ 下的版本。
+GATEWAY_PROXY="${DATA_DIR}/gateway_proxy.py"
+if [ ! -f "${GATEWAY_PROXY}" ]; then
+    GATEWAY_PROXY="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/gateway_proxy.py"
+fi
 GATEWAY_PID_FILE="${DATA_DIR}/gateway-proxy.pid"
 SERVICE_PORT="${TRIM_SERVICE_PORT:-9120}"
 case "${SERVICE_PORT}" in

@@ -407,6 +407,17 @@ install_hermes() {
         return 1
     fi
 
+    # 把网关适配层脚本部署到数据目录。
+    # 放在数据目录（应用用户可写）而不是 cmd/（root 只读），
+    # 这样后续排障可以直接替换脚本、不必重装应用。
+    local proxy_src="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+    if [ -f "${proxy_src}/gateway_proxy.py" ]; then
+        cp -f "${proxy_src}/gateway_proxy.py" "${DATA_DIR}/gateway_proxy.py" 2>/dev/null || true
+        cp -f "${proxy_src}/fnos_bridge.py" "${DATA_DIR}/fnos_bridge.py" 2>/dev/null || true
+        chmod +x "${DATA_DIR}/gateway_proxy.py" 2>/dev/null || true
+        log_msg "网关适配层脚本已部署到 ${DATA_DIR}"
+    fi
+
     log_msg "安装成功：$("${VENV_DIR}/bin/hermes" --version 2>&1 | head -n 1)"
     return 0
 }

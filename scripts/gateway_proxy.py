@@ -65,6 +65,25 @@ def log(msg: str) -> None:
     print(f"[gateway-proxy] {msg}", flush=True)
 
 
+# 前缀桥接脚本：把前端的站点根绝对路径（fetch/XHR/WS）改写成带网关前缀的路径。
+# 从同目录的 fnos_bridge.py 载入（随包一起分发）。
+def _load_bridge() -> str:
+    try:
+        import importlib.util
+        here = os.path.dirname(os.path.abspath(__file__))
+        spec = importlib.util.spec_from_file_location(
+            "fnos_bridge", os.path.join(here, "fnos_bridge.py"))
+        if spec is None or spec.loader is None:
+            return ""
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        # 返回未替换的模板，由调用方填入实际前缀
+        return mod.BRIDGE_JS
+    except Exception as exc:  # pragma: no cover
+        print(f"[gateway-proxy] 载入 bridge 失败：{exc}", flush=True)
+        return ""
+
+
 # ── 内容改写 ─────────────────────────────────────────────────────────────
 # 应用挂在 /app/hermes-desktop 子路径下，浏览器请求的 HTML/CSS/JS 里
 # 若出现以 / 开头的绝对路径，必须补上网关前缀，否则 404。
@@ -87,11 +106,30 @@ def rewrite_html(body: bytes, prefix: str) -> bytes:
     html = _HTML_ABS_RE.sub(
         lambda m: m.group(1) + _add_prefix(m.group(2), prefix), html)
 
-    # 2) 注入或修正 <base>，让相对路径（./assets/...）落在前缀下
+    # 注入前缀桥接脚本：前端的绝对路径 API 调用必须加前缀才能到达本应用。
+    # 放在主 bundle 之前，才能在应用代码运行前 hook 住 fetch/XHR/WebSocket。
+    if prefix and "__FNOS_BRIDGE__" not in html:
+        bridge = _load_bridge().replace("__PREFIX__", prefix)
+        if bridge:
+            tag = ('<!-- fnos-gateway-prefix-bridge -->\n'
+                   '    <script>\n' + bridge + '\n    </script>\n')
+            m = re.search(r"\s*<script type=\"module\"", html)
+            if m:
+                html = html[:m.start()] + "\n" + tag + html[m.start():]
+            elif re.search(r"<head\b[^>]*>", html, re.IGNORECASE):
+                html = re.sub(r"(<head\b[^>]*>)",
+                              lambda mm: mm.group(1) + "\n" + tag, html, count=1,
+                              flags=re.IGNORECASE)
+            else:
+                html = tag + html
+
+    # 2) 注入或修正 base 标签，让相对路径（./assets/...）落在前缀下。
+    #    放在 bridge 注入之后：bridge 脚本内容里可能出现 "<base" 字样，
+    #    先处理 base 会误把注释里的文本当成真标签。
     base = f'<base href="{prefix}/">' if prefix else '<base href="/">'
-    if re.search(r"<base\b[^>]*>", html, re.IGNORECASE):
-        html = re.sub(r"<base\s+href\s*=\s*[\"'][^\"']*[\"'][^>]*>",
-                      base, html, count=1, flags=re.IGNORECASE)
+    base_tag = re.compile(r"<base\s[^>]*>", re.IGNORECASE)
+    if base_tag.search(html):
+        html = base_tag.sub(base, html, count=1)
     elif re.search(r"<head\b[^>]*>", html, re.IGNORECASE):
         html = re.sub(r"(<head\b[^>]*>)",
                       lambda m: m.group(1) + base, html, count=1,
