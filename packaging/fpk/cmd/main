@@ -200,7 +200,7 @@ ensure_webapp_config() {
 # ── 飞牛版 Hermes Desktop（兜底生成） ────────────────────
 webapp:
   enabled: true
-  host: 127.0.0.1
+  host: 0.0.0.0
   port: ${SERVICE_PORT}
 
 dashboard:
