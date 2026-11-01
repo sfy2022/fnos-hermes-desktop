@@ -224,6 +224,46 @@ BRIDGE_JS = r"""
     }
   } catch (_) {}
 })();
+
+  // ── 表单提交：原生 POST 改成 fetch ────────────────────────────────
+  // Hermes 登录页是 <form method="POST" action="/auth/password-login">。
+  // 原生提交后服务端 302 到 "/"，浏览器在 iframe 里把 "/" 解析成 fnOS
+  // 网关根路径 —— 表现就是「登录成功后跳到飞牛桌面」。
+  // 浏览器级 302 跳转 JS 拦不住，所以把提交本身改成 fetch，
+  // 由我们决定跳回哪里。
+  function isAppTarget(action) {
+    try {
+      var u = new URL(action, location.origin);
+      if (u.origin !== location.origin) return false;
+      var p = u.pathname;
+      return p === "/" || isAppPath(p) || p.indexOf(prefix) === 0;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  document.addEventListener("submit", function (ev) {
+    var f = ev.target;
+    if (!f || String(f.tagName).toUpperCase() !== "FORM") return;
+    var action = f.getAttribute("action") || location.pathname;
+    if (!isAppTarget(action)) return;
+
+    ev.preventDefault();
+    ev.stopPropagation();
+
+    var method = String(f.getAttribute("method") || "GET").toUpperCase();
+    var mapped = mapUrl(action);
+    var opts = { method: method, credentials: "same-origin" };
+    if (method === "POST") opts.body = new FormData(f);
+
+    fetch(mapped === null || mapped === undefined ? action : mapped, opts)
+      .then(function (r) {
+        if (r.ok) location.replace(prefix + "/");
+        else location.reload();
+      })
+      .catch(function () { location.reload(); });
+  }, true);
+
 """
 
 

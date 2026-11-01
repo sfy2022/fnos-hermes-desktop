@@ -13,6 +13,11 @@ distributor_url="https://github.com/NousResearch/hermes-agent"
 desktop_uidir="ui"
 desktop_applaunchname="hermes-desktop.Application"
 service_port="9120"
+# 桌面内嵌入口走 fnOS 统一网关：iframe 的 src 落在 :5666 下（与飞牛桌面
+# 同源），浏览器才会把会话 Cookie 一并带上；直接指向 :9120 属跨源，
+# SameSite=lax 的 Cookie 不会发送，登录状态维持不住。
+# 网关把 /app/hermes-desktop/* 转到应用目录下的 app.sock，由适配层转给 Hermes。
 checkport="false"
+micro_app="true"
 ctl_stop="true"
 install_dep_apps="python312"

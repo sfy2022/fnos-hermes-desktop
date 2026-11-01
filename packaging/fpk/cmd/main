@@ -382,6 +382,8 @@ start_process() {
         fi
         if is_port_in_use "${SERVICE_PORT}"; then
             log_msg "服务就绪，端口 ${SERVICE_PORT} 已监听"
+            # 桌面内嵌入口需要网关适配层（app.sock）；网页入口直连 9120 不依赖它
+            start_gateway_proxy
             return 0
         fi
         sleep 1
@@ -389,6 +391,7 @@ start_process() {
     done
 
     log_msg "等待 ${waited}s 后未确认端口监听，但进程存活，继续运行"
+    start_gateway_proxy
     return 0
 }
 
