@@ -191,6 +191,48 @@ OUTPUT_DIR=/path/out   # 指定输出目录
 
 ---
 
+## 推送到 GitHub
+
+```bash
+# 1. 生成 token（GitHub → Settings → Developer settings → Personal access tokens）
+#    勾选 repo（读写仓库）与 workflow（触发 CI）
+export GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxx
+
+# 2. 创建仓库并推送
+gh repo create <your-username> --public --description "..." \
+  --source=. --remote=origin --push
+
+# 或者用本仓库自带的脚本（自动做隐私自检 + 触发 CI）
+bash scripts/push.sh github <your-username>
+```
+
+### 凭据安全
+
+`scripts/push.sh` 的凭据处理遵循以下原则：
+
+| 做法 | 原因 |
+|---|---|
+| token 只从**环境变量**读取 | 避免进入 shell 历史（`history`）与进程列表（`ps aux`） |
+| 用 `GIT_ASKPASS` + 临时文件传递 | 不进 `.git/config`，不会被 `git remote -v` 显示 |
+| 临时文件权限 600，退出即 `shred` | 即使脚本异常中断也不残留 |
+| 推送前自动跑隐私自检 | 硬编码的 token / 密码 / 内网 IP 会被拦下 |
+| 提交身份固定 `noreply` | 不在提交历史里留下真实邮箱 |
+
+> ⚠️ `~/.git-credentials` 是**明文**存储。若用 `git credential store`，
+> 请确认该文件不在任何同步盘或版本库里。
+
+### 隐私自检
+
+```bash
+python3 scripts/privacy_check.py            # 工作区 + 完整历史
+python3 scripts/privacy_check.py --staged   # 只看将要提交的内容
+```
+
+检查项：内网 IP、硬编码凭据、访问令牌、私钥内容、个人邮箱，
+以及提交身份是否为 noreply。
+
+---
+
 ## 在 Gitea 上运行 CI
 
 本仓库的工作流**同时兼容 GitHub Actions 与 Gitea Actions**（已在你自建的
