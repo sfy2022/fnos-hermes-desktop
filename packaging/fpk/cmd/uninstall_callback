@@ -1,18 +1,29 @@
 #!/bin/bash
 #
-# 卸载后回调 — 清理残留进程
+# 卸载后回调 — 清理残留进程，并按用户选择处理数据
 #
-# 注意：
+# fnOS 的卸载语义（官方开发文档）：
+#   系统会删除 target、tmp、home、etc 目录；
+#   保留 var 和 shares 目录（保护用户数据）。
+#   若要提供"完全删除"选项，需在 wizard/uninstall 里让用户选择，
+#   再在 cmd/uninstall_callback 中自行清理 —— 本脚本就是干这个的。
+#
+# 关键点：
 #   1) 用户可能选了「删除数据」，此时 TRIM_PKGVAR 已被 fnOS 删掉，
 #      不能假定数据目录存在，也不能往不存在的目录写日志。
 #   2) 进程匹配用本应用路径前缀，而不是 `pkill -f "hermes gateway"`
 #      —— 实际命令行里 hermes 与 gateway 之间隔着 runpy 代码，
 #      那样匹配不到，会留下僵尸进程占用端口。
 #      带路径前缀也确保不会误杀用户手动跑的其它 Hermes 实例。
+#   3) 删数据前先在存储卷根目录留一份归档，作为最后的找回途径
+#      （与 fnOS 上 fnmusic-ext 的做法一致）。
 
 LOG_DIR="${TRIM_PKGVAR}"
 LOG_FILE="${LOG_DIR}/info.log"
 PID_FILE="${LOG_DIR}/app.pid"
+
+# 向导里用户的选择："true" 表示清除数据
+DELETE_DATA="${wizard_delete_data:-false}"
 
 log_msg() {
     # 数据目录可能已被删除；写不进去就跳过，不报错
@@ -47,11 +58,71 @@ stop_app_processes() {
     # 2) 兜底：按本应用路径匹配
     pkill -TERM -f "${TRIM_PKGVAR}/venv/bin" 2>/dev/null || true
     pkill -TERM -f "${TRIM_PKGVAR}.*gateway" 2>/dev/null || true
+    pkill -TERM -f "gateway_proxy.py" 2>/dev/null || true
     sleep 2
     pkill -KILL -f "${TRIM_PKGVAR}/venv/bin" 2>/dev/null || true
     pkill -KILL -f "${TRIM_PKGVAR}.*gateway" 2>/dev/null || true
+    pkill -KILL -f "gateway_proxy.py" 2>/dev/null || true
+
+    # 3) 网关 socket：应用目录会被 fnOS 删除，这里确保不留悬空 socket
+    rm -f "${TRIM_APPDEST}/app.sock" 2>/dev/null || true
+}
+
+# 把要删的数据先归档一份到存储卷根目录。
+# fnOS 卸载会删掉应用目录，归档是用户唯一的找回途径。
+archive_data() {
+    local src="${TRIM_PKGVAR}"
+    [ -d "${src}" ] || return 0
+
+    # 存储卷根目录：与 TRIM_APPDEST 同卷的上一级
+    local vol_root
+    vol_root="$(dirname "$(dirname "${TRIM_APPDEST}")")"
+    [ -d "${vol_root}" ] || vol_root="/vol1"
+    [ -w "${vol_root}" ] || return 0
+
+    local stamp dest
+    stamp="$(date +%Y%m%d-%H%M%S)"
+    dest="${vol_root}/hermes-desktop-backup-${stamp}"
+
+    # 只归档真正需要留存的部分：配置、会话、记忆、技能授权。
+    # 不归档源码与 Python 环境（可重新下载），否则备份会有 1GB 以上。
+    mkdir -p "${dest}" 2>/dev/null || return 0
+    for item in config.yaml access-info.txt fnos-skill-setup.txt state sessions \
+                backups channel_directory.json gateway_state.json; do
+        [ -e "${src}/${item}" ] && cp -r "${src}/${item}" "${dest}/" 2>/dev/null || true
+    done
+    # 技能授权令牌（trim-cli 的 OAuth 凭据）
+    [ -d "${src}/.config" ] && cp -r "${src}/.config" "${dest}/" 2>/dev/null || true
+    [ -d "${TRIM_PKGHOME}/.config" ] && cp -r "${TRIM_PKGHOME}/.config" "${dest}/home-config" 2>/dev/null || true
+
+    echo "${dest}"
+}
+
+delete_data() {
+    local src="${TRIM_PKGVAR}"
+    [ -d "${src}" ] || return 0
+
+    local backup
+    backup="$(archive_data)"
+    log_msg "数据归档完成：${backup:-（未能归档）}"
+
+    # 删除数据目录本体
+    rm -rf "${src}" 2>/dev/null || true
+
+    # 顺带清理与本应用相关的其它持久化位置
+    rm -rf "${TRIM_PKGHOME}/.config/trim-cli" 2>/dev/null || true
+
+    log_msg "已按用户选择清除应用数据"
 }
 
 stop_app_processes
+
+if [ "${DELETE_DATA}" = "true" ]; then
+    log_msg "用户选择清除数据，开始清理"
+    delete_data
+else
+    log_msg "用户选择保留数据，${TRIM_PKGVAR} 保持不变"
+fi
+
 log_msg "卸载清理完成"
 exit 0

@@ -56,5 +56,24 @@ stop_app_processes() {
 
 log_msg "卸载前停止服务"
 stop_app_processes
+
+# 卸载前先把值得留存的数据归档到存储卷根目录。
+# fnOS 卸载会删除应用目录；即使用户选择保留数据，
+# 这里也留一份"逃生通道"，万一之后手动清理了数据目录还能找回。
+archive_dir="$(dirname "$(dirname "${TRIM_APPDEST}")")"
+[ -d "${archive_dir}" ] || archive_dir="/vol1"
+if [ -d "${TRIM_PKGVAR}" ] && [ -w "${archive_dir}" ]; then
+    stamp="$(date +%Y%m%d-%H%M%S)"
+    dest="${archive_dir}/hermes-desktop-backup-${stamp}"
+    if mkdir -p "${dest}" 2>/dev/null; then
+        for item in config.yaml access-info.txt fnos-skill-setup.txt state sessions \
+                    backups channel_directory.json gateway_state.json; do
+            [ -e "${TRIM_PKGVAR}/${item}" ] && cp -r "${TRIM_PKGVAR}/${item}" "${dest}/" 2>/dev/null || true
+        done
+        [ -d "${TRIM_PKGVAR}/.config" ] && cp -r "${TRIM_PKGVAR}/.config" "${dest}/" 2>/dev/null || true
+        log_msg "数据已归档到 ${dest}"
+    fi
+fi
+
 log_msg "卸载前已停止服务"
 exit 0
