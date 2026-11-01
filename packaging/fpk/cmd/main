@@ -326,6 +326,10 @@ start_process() {
 
     # HERMES_HOME 指向应用数据目录：会话、技能、记忆、配置全部落在这里
     export HERMES_HOME="${DATA_DIR}"
+    # HOME 指向应用自己的 home 目录。fnOS 注入的是 /home/<appname>，
+    # 那个路径并不存在（真实目录是 /vol1/@apphome/<appname>），
+    # 依赖会因此报错或退化到默认路径。
+    export HOME="${TRIM_PKGHOME:-${DATA_DIR}}"
     # 指向打包进来的官方渲染层，避免运行时自行构建（需要 Node 与源码）
     export HERMES_WEBAPP_DIST="${WEBAPP_DIST}"
     export PATH="${VENV_DIR}/bin:${PATH}"

@@ -373,6 +373,13 @@ fetch_source() {
 
 # ── 安装（关键：Python 3.14 + 官方源 + 放宽 exclude-newer） ──────────────
 install_hermes() {
+    # HOME 必须指向应用自己的 home 目录。
+    # fnOS 注入的 HOME 是 /home/<appname>，那个路径并不存在（真实目录是
+    # /vol1/@apphome/<appname>），pm 会因此报
+    #   PermissionError: [Errno 13] Permission denied: '/home/hermes-desktop'
+    # 而失败回退到 uv —— 既装上了用不到的 chromium 等重依赖（慢），
+    # 又丢掉了 pm 自动剥离 exclude-newer 的好处。
+    export HOME="${TRIM_PKGHOME:-${DATA_DIR}}"
     export UV_CACHE_DIR="${DATA_DIR}/.uv-cache"
     export UV_PYTHON_INSTALL_DIR="${DATA_DIR}/pythons"
     # PyPI 源选择。pm 路径会自动剥离 exclude-newer，因此镜像缺
