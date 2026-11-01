@@ -409,10 +409,27 @@ class ProxyHandler(socketserver.BaseRequestHandler):
         for key, value in headers.items():
             if key.lower() not in hop:
                 out_headers[key] = value
-        out_headers["Host"] = f"{self.server.upstream_host}:{self.server.upstream_port}"
+        upstream_origin = (
+            f"http://{self.server.upstream_host}:{self.server.upstream_port}")
+        out_headers["Host"] = (
+            f"{self.server.upstream_host}:{self.server.upstream_port}")
         out_headers["X-Forwarded-For"] = "127.0.0.1"
         out_headers["X-Forwarded-Proto"] = "http"
         out_headers["X-Forwarded-Host"] = headers.get("Host", "localhost")
+
+        # Hermes 校验 Origin 必须是「它自己」：POST /webapp/window-session
+        # 否则 403 {"detail":"Webapp window handoff requires a same-origin
+        # request"}。经本层访问时浏览器给的 Origin 是 http://<nas>:<port>，
+        # 与上游自我认知 http://127.0.0.1:9120 不同，会被拒 —— 改写成上游地址。
+        for key in list(out_headers):
+            if key.lower() == "origin":
+                out_headers[key] = upstream_origin
+            elif key.lower() == "referer":
+                value = out_headers[key]
+                tail = value.split("://", 1)[-1]
+                slash = tail.find("/")
+                rest = tail[slash:] if slash >= 0 else "/"
+                out_headers[key] = f"{upstream_origin}{rest}"
         if body:
             out_headers["Content-Length"] = str(len(body))
 
@@ -428,6 +445,13 @@ class ProxyHandler(socketserver.BaseRequestHandler):
                                                 "connection", "keep-alive")]
             self._rewrite_set_cookie(resp_headers)
             self._rewrite_location(resp_headers)
+
+            # 配对成功即落标记 cookie，首页不再被导向一次性链接
+            if "window-session" in target and resp.status == 200:
+                resp_headers.append((
+                    "Set-Cookie",
+                    f"{PAIRED_COOKIE}=1; Path={self.server.prefix or '/'}/; "
+                    f"SameSite=Lax; Max-Age=86400"))
 
             # HTML/CSS 内容改写：补上网关前缀，让子路径下的资源能正确加载
             ctype = resp.getheader("Content-Type", "")
@@ -496,6 +520,16 @@ class ProxyHandler(socketserver.BaseRequestHandler):
         prefix = getattr(self.server, "prefix", "") or ""
         stripped = clean[len(prefix):] if prefix and clean.startswith(prefix) else clean
         if stripped != "/":
+            return False
+
+        # 已配对（带 cookie）就正常放行，避免 launch 页面
+        # location.replace('/') 回来时又被导向一次性链接
+        cookie = ""
+        try:
+            cookie = self.headers.get("Cookie", "") or ""
+        except AttributeError:
+            cookie = ""
+        if PAIRED_COOKIE in cookie:
             return False
 
         home = getattr(self.server, "hermes_home", "") or ""
@@ -687,6 +721,12 @@ def _ensure_upstream(command: str, cwd: str, host: str, port: int) -> None:
 #: 随 favicon 等并发请求，若每次都申请新的，浏览器手里那个立刻作废，
 #: 于是看到 "This launch link was already used or has expired"。
 #: 所以短时间内的请求必须复用同一个链接。
+#: 配对标记 cookie。launch 成功后由本层设置，用来区分
+#: 「首次访问（需要走一次性链接）」和「已配对（正常访问）」——
+#: 否则 launch 页面 location.replace('/') 回到首页时，
+#: 本层又会把它导向 launch，而那个链接只能用一次 → 报「已用过」。
+PAIRED_COOKIE = "hermes_fnos_paired"
+
 _LAUNCH_CACHE: dict[str, tuple[str, float]] = {}
 _LAUNCH_TTL = 90.0
 
@@ -813,6 +853,12 @@ def _rewrite_response_body(raw: bytes, path: str, prefix: str) -> bytes:
     if should_rewrite(path, ctype) == "html":
         body = rewrite_html(body, prefix)
 
+    # launch 页面的 POST /webapp/window-session 成功即表示配对完成，
+    # 在这里落一个标记 cookie，首页就不会再被导向一次性链接。
+    paired = False
+    if "window-session" in path and status.split()[1:2] == ["200"]:
+        paired = True
+
     out_headers = []
     for k, v in headers:
         if k.lower() in ("content-length", "transfer-encoding", "connection"):
@@ -820,6 +866,11 @@ def _rewrite_response_body(raw: bytes, path: str, prefix: str) -> bytes:
         out_headers.append((k, v))
     out_headers.append(("Content-Length", str(len(body))))
     out_headers.append(("Connection", "close"))
+    if paired:
+        out_headers.append((
+            "Set-Cookie",
+            f"{PAIRED_COOKIE}=1; Path={prefix or '/'}/; "
+            f"SameSite=Lax; Max-Age=86400"))
 
     head_bytes = status.encode("latin-1") + b"\r\n"
     head_bytes += b"".join(f"{k}: {v}\r\n".encode("latin-1") for k, v in out_headers)
@@ -889,7 +940,9 @@ def _serve_tcp(host: str, port: int, upstream: tuple[str, int], prefix: str,
                     stripped = "/" + stripped
 
                 # 与 socket 通道一致：首页请求改写成一次性启动链接
-                if stripped == "/":
+                # 已配对（带 cookie）就直接放行，避免死循环
+                if stripped == "/" and PAIRED_COOKIE not in (
+                        self.headers.get("Cookie") or ""):
                     link = _launch_path(hermes_home)
                     if link:
                         target = f"{prefix}{link}"
@@ -905,8 +958,28 @@ def _serve_tcp(host: str, port: int, upstream: tuple[str, int], prefix: str,
                 lines = [f"{self.command} {stripped}{query} HTTP/1.1",
                          f"Host: {up_host}:{up_port}"]
                 for k, v in self.headers.items():
-                    if k.lower() not in ("host", "content-length", "connection"):
-                        lines.append(f"{k}: {v}")
+                    low = k.lower()
+                    if low in ("host", "content-length", "connection"):
+                        continue
+                    # Hermes 会校验 Origin 必须是「它自己」：
+                    #   POST /webapp/window-session
+                    #   → 403 {"detail":"Webapp window handoff requires
+                    #           a same-origin request"}
+                    # 浏览器经本层访问时 Origin 是 http://<nas>:<port>，
+                    # 与上游自我认知 http://127.0.0.1:9120 不同，会被拒。
+                    # 于是把 Origin / Referer 改写成上游自身地址。
+                    if low == "origin":
+                        lines.append(f"Origin: http://{up_host}:{up_port}")
+                        continue
+                    if low == "referer":
+                        # 保留路径部分，只换掉 scheme://host:port
+                        tail = v.split("://", 1)[-1]
+                        slash = tail.find("/")
+                        rest = tail[slash:] if slash >= 0 else "/"
+                        lines.append(
+                            f"Referer: http://{up_host}:{up_port}{rest}")
+                        continue
+                    lines.append(f"{k}: {v}")
                 if body:
                     lines.append(f"Content-Length: {len(body)}")
                 lines.append("Connection: close")
