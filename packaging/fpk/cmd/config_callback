@@ -1,0 +1,12 @@
+#!/bin/bash
+#
+# 配置变更后回调 — 提示重启使配置生效
+
+LOG_FILE="${TRIM_PKGVAR}/info.log"
+
+log_msg() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - [config_callback] $1" >> "${LOG_FILE}" 2>/dev/null || true
+}
+
+log_msg "配置已变更，需重启应用使 webapp / dashboard 配置生效"
+exit 0

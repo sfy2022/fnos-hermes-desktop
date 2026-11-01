@@ -1,0 +1,364 @@
+#!/bin/bash
+#
+# 安装后回调 — 部署 Hermes Agent 运行时（源码版，含 Webapp 支持）
+#
+# 实测结论（2026-11，Debian 12 / NAS）：
+#   1. PyPI 上 hermes-agent 最高仅 0.19.0，且该版本没有 `hermes webapp` 子命令。
+#      Webapp 是之后才加入的，必须装 GitHub 源码版（editable）。
+#   2. 源码要求 Python 3.14（部分依赖按 python_version >= '3.14' 声明，
+#      如 ruamel.yaml；3.11 环境会缺模块）。用 uv 自管 Python 3.14。
+#   3. uv 0.13+ 默认带 exclude-newer（截止其构建日），且国内 PyPI 镜像
+#      不携带 upload-time 元数据 → 依赖会被误判为"过新"而全部过滤。
+#      必须用官方 PyPI 源 + 显式放宽 exclude-newer。
+#
+# 流程：装 uv → 拉源码 → Python 3.14 venv → editable 安装 → 校验
+
+LOG_FILE="${TRIM_PKGVAR}/info.log"
+DATA_DIR="${TRIM_PKGVAR}"
+VENV_DIR="${DATA_DIR}/venv"
+UV_BIN="${DATA_DIR}/bin/uv"
+SRC_DIR="${DATA_DIR}/src"
+WEBAPP_DIST="${TRIM_APPDEST}/webapp"
+
+# 源码版本标签；留空则用 main 分支
+HERMES_REF="${HERMES_REF:-main}"
+
+# 服务端口：与 manifest 的 service_port 保持一致。
+# fnOS 安装阶段通常不注入 TRIM_SERVICE_PORT，故以 manifest 值为准并做兜底。
+SERVICE_PORT="${TRIM_SERVICE_PORT:-9120}"
+case "${SERVICE_PORT}" in
+    ''|*[!0-9]*) SERVICE_PORT="9120" ;;
+esac
+
+log_msg() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - [install_callback] $1" >> "${LOG_FILE}" 2>/dev/null || true
+}
+
+toast_err() {
+    if [ -n "${TRIM_TEMP_LOGFILE}" ]; then
+        echo "$1" > "${TRIM_TEMP_LOGFILE}" 2>/dev/null || true
+    fi
+    log_msg "ERROR: $1"
+}
+
+# 生成随机强密码（无外部依赖）
+gen_password() {
+    if [ -r /dev/urandom ]; then
+        tr -dc 'A-Za-z0-9' < /dev/urandom 2>/dev/null | head -c 20
+    else
+        date +%s | sha256sum | cut -c1-20
+    fi
+}
+
+# ── 处理安装向导输入 ────────────────────────────────────────────────────
+# 向导变量（无 TRIM_ 前缀）在安装时以环境变量形式注入
+apply_wizard_settings() {
+    local cfg="${DATA_DIR}/config.yaml"
+    local user="${wizard_web_user:-admin}"
+    local pass="${wizard_web_pass:-}"
+
+    if [ -z "${pass}" ]; then
+        pass="$(gen_password)"
+        log_msg "未设置密码，已生成随机密码"
+    fi
+
+    mkdir -p "${DATA_DIR}" 2>/dev/null || true
+    [ -f "${cfg}" ] || printf '# Hermes Agent 配置\n' > "${cfg}"
+
+    # 只在缺失时追加，避免重复安装产生重复段落
+    if ! grep -q "^webapp:" "${cfg}" 2>/dev/null; then
+        cat >> "${cfg}" <<EOF
+
+# ── 飞牛版 Hermes Desktop（由安装向导生成） ─────────────
+webapp:
+  enabled: true
+  host: 0.0.0.0
+  port: ${SERVICE_PORT}
+
+dashboard:
+  basic_auth:
+    username: ${user}
+    password: "${pass}"
+EOF
+        chmod 600 "${cfg}" 2>/dev/null || true
+        log_msg "已写入 webapp 配置（host=0.0.0.0 port=${SERVICE_PORT} user=${user}）"
+    else
+        log_msg "config.yaml 已含 webapp 段，保留原配置"
+    fi
+
+    # 把访问信息单独存一份，便于用户查阅
+    local info="${DATA_DIR}/access-info.txt"
+    cat > "${info}" <<EOF
+Hermes Desktop（飞牛版）访问信息
+================================
+地址:     http://<本机IP>:${SERVICE_PORT}
+用户名:   ${user}
+密码:     ${pass}
+
+提示：
+- 该地址在局域网内可访问，登录后等同于授予本机命令执行权限，请勿公网暴露。
+- 密码可通过编辑 ${cfg} 中的 dashboard.basic_auth 修改，改后需重启应用。
+EOF
+    chmod 600 "${info}" 2>/dev/null || true
+    log_msg "访问信息已写入 ${info}"
+
+    # 导出给后续步骤使用
+    HERMES_WEB_USER="${user}"
+    HERMES_WEB_PASS="${pass}"
+}
+
+# ── 安装 uv ───────────────────────────────────────────────────────────────
+# 说明：uv 的发行物文件名带版本号且各源结构不同，不能拼固定 URL。
+# 策略：先从 PyPI 索引页解析出匹配当前架构的真实链接并下载；
+#       索引不可用时回退 GitHub release tarball。
+ensure_uv() {
+    if [ -x "${UV_BIN}" ]; then
+        log_msg "uv 已存在：${UV_BIN}"
+        return 0
+    fi
+
+    mkdir -p "${DATA_DIR}/bin" "${DATA_DIR}/.uv-cache" 2>/dev/null || true
+
+    local arch uv_target
+    arch="$(uname -m)"
+    case "${arch}" in
+    x86_64)  uv_target="x86_64-unknown-linux-gnu" ;;
+    aarch64) uv_target="aarch64-unknown-linux-gnu" ;;
+    armv7l)  uv_target="armv7-unknown-linux-gnueabihf" ;;
+    *)
+        toast_err "不支持的架构：${arch}"
+        return 1
+        ;;
+    esac
+
+    # ── 方式一：PyPI JSON API 精确定位最新版 linux wheel ──
+    # 各源的索引页命名与格式不一致，解析容易出错；JSON API 返回结构化结果，最稳。
+    local arch_tag
+    case "${arch}" in
+    x86_64)  arch_tag="x86_64" ;;
+    aarch64) arch_tag="aarch64" ;;
+    armv7l)  arch_tag="armv7l" ;;
+    esac
+
+    log_msg "通过 PyPI JSON API 定位 uv 安装包 ..."
+    local meta="${DATA_DIR}/.uv-cache/uv.json"
+    if curl -sL --fail --max-time 40 --http1.1 -o "${meta}" \
+        "https://pypi.org/pypi/uv/json" 2>>"${LOG_FILE}"; then
+        local url
+        url="$(python3 -c "
+import json,sys
+try:
+    d=json.load(open('${meta}'))
+except Exception:
+    sys.exit(0)
+v=d['info']['version']
+for f in d['releases'].get(v,[]):
+    fn=f['filename']
+    if '${arch_tag}' in fn and 'linux' in fn and 'manylinux' in fn and 'musllinux' not in fn:
+        print(f['url']); break
+" 2>>"${LOG_FILE}")"
+
+        if [ -n "${url}" ]; then
+            log_msg "下载 uv：${url}"
+            if curl -sL --fail --retry 2 --max-time 240 --http1.1 \
+                -o "${DATA_DIR}/.uv-cache/uv.whl" "${url}" 2>>"${LOG_FILE}"; then
+                if command -v unzip >/dev/null 2>&1; then
+                    unzip -o -j "${DATA_DIR}/.uv-cache/uv.whl" '*/uv' -d "${DATA_DIR}/bin" >>"${LOG_FILE}" 2>&1
+                else
+                    python3 -c "
+import zipfile
+z=zipfile.ZipFile('${DATA_DIR}/.uv-cache/uv.whl')
+names=[n for n in z.namelist() if n.endswith('/uv') or n=='uv']
+if names:
+    open('${DATA_DIR}/bin/uv','wb').write(z.read(sorted(names,key=len)[0]))
+" >>"${LOG_FILE}" 2>&1 || true
+                fi
+                chmod +x "${UV_BIN}" 2>/dev/null || true
+            fi
+        fi
+    fi
+
+    # ── 方式二：回退 GitHub release tarball ──
+    if [ ! -x "${UV_BIN}" ]; then
+        log_msg "JSON API 方式未成功，回退 GitHub tarball ..."
+        local tarball="${DATA_DIR}/.uv-cache/uv.tar.gz"
+        if curl -sL --fail --retry 2 --retry-delay 3 --max-time 240 --http1.1 \
+            -o "${tarball}" \
+            "https://github.com/astral-sh/uv/releases/latest/download/uv-${uv_target}.tar.gz" 2>>"${LOG_FILE}"; then
+            mkdir -p "${DATA_DIR}/.uvx" 2>/dev/null || true
+            tar xzf "${tarball}" -C "${DATA_DIR}/.uvx" >>"${LOG_FILE}" 2>&1
+            local found
+            found="$(find "${DATA_DIR}/.uvx" -type f -name uv 2>/dev/null | head -n 1)"
+            if [ -n "${found}" ]; then
+                cp -f "${found}" "${UV_BIN}" 2>/dev/null || true
+                chmod +x "${UV_BIN}" 2>/dev/null || true
+            fi
+        fi
+    fi
+
+    if [ ! -x "${UV_BIN}" ]; then
+        toast_err "uv 安装失败，请检查网络或代理设置。"
+        return 1
+    fi
+
+    log_msg "uv 安装完成：$(${UV_BIN} --version 2>&1)"
+    return 0
+}
+
+# ── 拉取源码 ─────────────────────────────────────────────────────────────
+fetch_source() {
+    if [ -f "${SRC_DIR}/hermes_cli/webapp.py" ]; then
+        log_msg "源码已存在，跳过下载"
+        return 0
+    fi
+
+    mkdir -p "${DATA_DIR}" 2>/dev/null || true
+    rm -rf "${SRC_DIR}" 2>/dev/null || true
+
+    log_msg "获取 hermes-agent 源码（${HERMES_REF}）..."
+    # NAS 到 github.com 常不稳定（443 超时），按向导选择与自动探测组合多个来源
+    local gh_mode="${wizard_github_proxy:-auto}"
+
+    if [ "${gh_mode}" = "auto" ] || [ "${gh_mode}" = "direct" ]; then
+        if command -v git >/dev/null 2>&1; then
+            log_msg "尝试 git clone ..."
+            timeout 300 git -c http.version=HTTP/1.1 clone --depth 1 --branch "${HERMES_REF}" \
+                https://github.com/NousResearch/hermes-agent.git "${SRC_DIR}" >>"${LOG_FILE}" 2>&1
+        fi
+    fi
+
+    if [ ! -f "${SRC_DIR}/hermes_cli/webapp.py" ]; then
+        rm -rf "${SRC_DIR}" 2>/dev/null || true
+        local tgz="${DATA_DIR}/.uv-cache/src.tar.gz"
+        local urls=()
+        case "${gh_mode}" in
+        ghproxy)     urls=("https://gh-proxy.com/https://github.com/NousResearch/hermes-agent/archive/refs/heads/${HERMES_REF}.tar.gz") ;;
+        ghproxy_net) urls=("https://ghproxy.net/https://github.com/NousResearch/hermes-agent/archive/refs/heads/${HERMES_REF}.tar.gz") ;;
+        codeload)    urls=("https://codeload.github.com/NousResearch/hermes-agent/tar.gz/refs/heads/${HERMES_REF}") ;;
+        direct)      urls=("https://github.com/NousResearch/hermes-agent/archive/refs/heads/${HERMES_REF}.tar.gz") ;;
+        *)           urls=(
+                        "https://codeload.github.com/NousResearch/hermes-agent/tar.gz/refs/heads/${HERMES_REF}"
+                        "https://gh-proxy.com/https://github.com/NousResearch/hermes-agent/archive/refs/heads/${HERMES_REF}.tar.gz"
+                        "https://ghproxy.net/https://github.com/NousResearch/hermes-agent/archive/refs/heads/${HERMES_REF}.tar.gz"
+                        "https://github.com/NousResearch/hermes-agent/archive/refs/heads/${HERMES_REF}.tar.gz"
+                     ) ;;
+        esac
+        local u
+        for u in "${urls[@]}"; do
+            log_msg "下载源码：$(echo "${u}" | cut -d/ -f3)"
+            if curl -sL --fail --retry 2 --retry-delay 3 --max-time 600 --http1.1 \
+                -o "${tgz}" "${u}" 2>>"${LOG_FILE}" && [ -s "${tgz}" ]; then
+                mkdir -p "${DATA_DIR}/srcx" 2>/dev/null || true
+                tar xzf "${tgz}" -C "${DATA_DIR}/srcx" >>"${LOG_FILE}" 2>&1
+                local sub
+                sub="$(find "${DATA_DIR}/srcx" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | head -n 1)"
+                if [ -n "${sub}" ]; then
+                    mv "${sub}" "${SRC_DIR}" 2>/dev/null || true
+                fi
+                if [ -f "${SRC_DIR}/hermes_cli/webapp.py" ]; then
+                    log_msg "源码下载成功（$(echo "${u}" | cut -d/ -f3)）"
+                    break
+                fi
+            fi
+            rm -f "${tgz}" 2>/dev/null || true
+        done
+    fi
+
+    if [ ! -f "${SRC_DIR}/hermes_cli/webapp.py" ]; then
+        toast_err "源码下载失败，请检查 GitHub 访问或代理设置。"
+        return 1
+    fi
+
+    log_msg "源码就绪：${SRC_DIR}"
+    return 0
+}
+
+# ── 安装（关键：Python 3.14 + 官方源 + 放宽 exclude-newer） ──────────────
+install_hermes() {
+    export UV_CACHE_DIR="${DATA_DIR}/.uv-cache"
+    export UV_PYTHON_INSTALL_DIR="${DATA_DIR}/pythons"
+    # 依赖解析需要完整的 upload-time 元数据：国内镜像普遍缺失，会被 uv 的
+    # exclude-newer 全部过滤掉，因此默认用官方源。
+    case "${wizard_pypi_index:-official}" in
+    tuna)   export UV_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple" ;;
+    aliyun) export UV_INDEX_URL="https://mirrors.aliyun.com/pypi/simple" ;;
+    *)      export UV_INDEX_URL="https://pypi.org/simple" ;;
+    esac
+    log_msg "PyPI 源：${UV_INDEX_URL}"
+    # 显式放宽 uv 的默认 exclude-newer（其构建日会误伤新版本依赖）
+    local EXCLUDE="--exclude-newer 2027-01-01"
+
+    if [ ! -x "${VENV_DIR}/bin/hermes" ]; then
+        log_msg "创建 Python 3.14 虚拟环境 ..."
+        "${UV_BIN}" venv --python 3.14 "${VENV_DIR}" >>"${LOG_FILE}" 2>&1
+        if [ ! -x "${VENV_DIR}/bin/python3" ]; then
+            log_msg "Python 3.14 创建失败，回退 3.12"
+            "${UV_BIN}" venv --python 3.12 "${VENV_DIR}" >>"${LOG_FILE}" 2>&1
+        fi
+        if [ ! -x "${VENV_DIR}/bin/python3" ]; then
+            toast_err "创建虚拟环境失败：$(tail -3 "${LOG_FILE}" 2>/dev/null)"
+            return 1
+        fi
+        log_msg "Python 版本：$("${VENV_DIR}/bin/python3" --version 2>&1)"
+    fi
+
+    log_msg "editable 安装 hermes-agent[all] ..."
+    ( cd "${SRC_DIR}" && "${UV_BIN}" pip install --python "${VENV_DIR}/bin/python3" \
+        ${EXCLUDE} -e ".[all]" ) >>"${LOG_FILE}" 2>&1
+
+    if [ ! -x "${VENV_DIR}/bin/hermes" ]; then
+        log_msg "[all] 安装失败，回退 [web] extra"
+        ( cd "${SRC_DIR}" && "${UV_BIN}" pip install --python "${VENV_DIR}/bin/python3" \
+            ${EXCLUDE} -e ".[web]" ) >>"${LOG_FILE}" 2>&1
+    fi
+
+    if [ ! -x "${VENV_DIR}/bin/hermes" ]; then
+        toast_err "hermes-agent 安装失败，请查看 ${LOG_FILE}"
+        return 1
+    fi
+
+    # webapp 子命令是本应用的前提，必须存在
+    if ! "${VENV_DIR}/bin/hermes" webapp --help >/dev/null 2>&1; then
+        toast_err "安装的版本缺少 webapp 子命令，无法提供 Desktop 界面。"
+        return 1
+    fi
+
+    log_msg "安装成功：$("${VENV_DIR}/bin/hermes" --version 2>&1 | head -n 1)"
+    return 0
+}
+
+# ── 校验 Webapp 渲染层 ──────────────────────────────────────────────────
+verify_webapp() {
+    if [ ! -f "${WEBAPP_DIST}/index.html" ]; then
+        toast_err "Webapp 渲染层不完整（缺少 index.html），请重新下载安装包。"
+        return 1
+    fi
+    local count
+    count="$(find "${WEBAPP_DIST}" -type f 2>/dev/null | wc -l)"
+    log_msg "Webapp 渲染层校验通过：${count} 个文件"
+    if [ "${count}" -lt 100 ]; then
+        toast_err "Webapp 渲染层文件异常（仅 ${count} 个），请重新下载安装包。"
+        return 1
+    fi
+    return 0
+}
+
+# ── 主流程 ──────────────────────────────────────────────────────────────
+log_msg "=== install_callback 开始 ==="
+log_msg "DATA_DIR=${DATA_DIR}"
+
+mkdir -p "${DATA_DIR}" 2>/dev/null || true
+
+verify_webapp || exit 1
+apply_wizard_settings || exit 1
+ensure_uv || exit 1
+fetch_source || exit 1
+install_hermes || exit 1
+
+# 修复属主：应用以专用用户运行，确保数据目录可写
+if [ -n "${TRIM_UID}" ] && [ -n "${TRIM_GID}" ]; then
+    chown -R "${TRIM_UID}:${TRIM_GID}" "${DATA_DIR}" 2>/dev/null || true
+fi
+
+log_msg "=== install_callback 完成 ==="
+exit 0

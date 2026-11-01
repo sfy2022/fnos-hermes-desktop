@@ -1,0 +1,19 @@
+#!/bin/bash
+#
+# 卸载后回调 — 停止残留进程
+# 数据目录由 fnOS 保留，用户会话与配置不丢失。
+
+LOG_FILE="${TRIM_PKGVAR}/info.log"
+
+log_msg() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - [uninstall_callback] $1" >> "${LOG_FILE}" 2>/dev/null || true
+}
+
+pkill -TERM -f "hermes gateway" 2>/dev/null || true
+pkill -TERM -f "hermes serve" 2>/dev/null || true
+sleep 1
+pkill -KILL -f "hermes gateway" 2>/dev/null || true
+pkill -KILL -f "hermes serve" 2>/dev/null || true
+
+log_msg "卸载清理完成，用户数据已保留"
+exit 0

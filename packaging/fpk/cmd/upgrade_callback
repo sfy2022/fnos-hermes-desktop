@@ -1,0 +1,53 @@
+#!/bin/bash
+#
+# 升级后回调 — 更新 Hermes Agent 运行时（保留用户数据与配置）
+#
+# 与 install_callback 保持同一套环境约束：
+#   Python 3.14 + 官方 PyPI 源 + 放宽 exclude-newer
+
+LOG_FILE="${TRIM_PKGVAR}/info.log"
+DATA_DIR="${TRIM_PKGVAR}"
+VENV_DIR="${DATA_DIR}/venv"
+UV_BIN="${DATA_DIR}/bin/uv"
+SRC_DIR="${DATA_DIR}/src"
+HERMES_REF="${HERMES_REF:-main}"
+
+log_msg() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - [upgrade_callback] $1" >> "${LOG_FILE}" 2>/dev/null || true
+}
+
+log_msg "=== upgrade_callback 开始 ==="
+
+if [ ! -x "${UV_BIN}" ] || [ ! -x "${VENV_DIR}/bin/python3" ]; then
+    log_msg "运行环境不完整，跳过更新（建议卸载后重装）"
+    exit 0
+fi
+
+# 更新源码
+if [ -d "${SRC_DIR}/.git" ]; then
+    log_msg "更新源码到 ${HERMES_REF} ..."
+    ( cd "${SRC_DIR}" && git fetch --depth 1 origin "${HERMES_REF}" >>"${LOG_FILE}" 2>&1 \
+        && git reset --hard "origin/${HERMES_REF}" >>"${LOG_FILE}" 2>&1 ) || true
+    log_msg "源码更新完成"
+else
+    log_msg "源码目录不存在，跳过源码更新"
+fi
+
+# 重新安装依赖
+export UV_CACHE_DIR="${DATA_DIR}/.uv-cache"
+export UV_PYTHON_INSTALL_DIR="${DATA_DIR}/pythons"
+export UV_INDEX_URL="https://pypi.org/simple"
+
+if [ -f "${SRC_DIR}/pyproject.toml" ]; then
+    log_msg "重新安装依赖 ..."
+    ( cd "${SRC_DIR}" && "${UV_BIN}" pip install --python "${VENV_DIR}/bin/python3" \
+        --exclude-newer 2027-01-01 -e ".[all]" ) >>"${LOG_FILE}" 2>&1 || true
+    log_msg "依赖更新完成"
+fi
+
+if [ -n "${TRIM_UID}" ] && [ -n "${TRIM_GID}" ]; then
+    chown -R "${TRIM_UID}:${TRIM_GID}" "${DATA_DIR}" 2>/dev/null || true
+fi
+
+log_msg "=== upgrade_callback 完成 ==="
+exit 0

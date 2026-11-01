@@ -1,0 +1,23 @@
+#!/bin/bash
+#
+# 安装前回调 — 清理残留进程，避免端口占用与文件句柄冲突导致安装失败
+
+LOG_FILE="${TRIM_PKGVAR}/info.log"
+
+log_msg() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - [install_init] $1" >> "${LOG_FILE}" 2>/dev/null || true
+}
+
+log_msg "=== install_init 开始 ==="
+
+pkill -TERM -f "hermes gateway" 2>/dev/null || true
+pkill -TERM -f "hermes serve" 2>/dev/null || true
+sleep 1
+
+pkill -KILL -f "hermes gateway" 2>/dev/null || true
+pkill -KILL -f "hermes serve" 2>/dev/null || true
+
+rm -f "${TRIM_PKGVAR}/app.pid" 2>/dev/null || true
+
+log_msg "残留进程与 pid 文件清理完成"
+exit 0

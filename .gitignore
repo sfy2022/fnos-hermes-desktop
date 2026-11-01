@@ -1,0 +1,22 @@
+# 构建产物
+dist/
+.build/
+.build-smoke/
+*.fpk
+
+# 打包出的渲染层（体积大，由 CI 重新生成）
+packaging/fpk/app/webapp/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# 系统
+Thumbs.db

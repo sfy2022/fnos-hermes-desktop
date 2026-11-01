@@ -1,0 +1,11 @@
+[
+    {
+        "stepTitle": "配置说明",
+        "items": [
+            {
+                "type": "tips",
+                "helpText": "模型供应商、API Key、消息渠道均在 Hermes Desktop 界面内配置。<br>修改 config.yaml 中的 webapp / dashboard 配置后，需重启应用使配置生效。"
+            }
+        ]
+    }
+]

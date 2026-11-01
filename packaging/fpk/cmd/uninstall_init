@@ -1,0 +1,16 @@
+#!/bin/bash
+#
+# 卸载前回调 — 停止服务，保留用户数据
+
+LOG_FILE="${TRIM_PKGVAR}/info.log"
+
+log_msg() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - [uninstall_init] $1" >> "${LOG_FILE}" 2>/dev/null || true
+}
+
+pkill -TERM -f "hermes gateway" 2>/dev/null || true
+pkill -TERM -f "hermes serve" 2>/dev/null || true
+sleep 1
+
+log_msg "卸载前已停止服务"
+exit 0

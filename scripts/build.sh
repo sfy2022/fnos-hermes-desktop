@@ -1,0 +1,164 @@
+#!/usr/bin/env bash
+#
+# 构建 fnOS Hermes Desktop 安装包（.fpk）
+#
+# 流程：
+#   1. 克隆/更新上游 hermes-agent 源码
+#   2. 用官方脚本构建 Webapp 渲染层（Desktop 的浏览器形态）
+#   3. 把渲染层塞进 fpk 模板
+#   4. 用 fnpack 打包成 .fpk
+#
+# 环境变量：
+#   UPSTREAM_REPO   上游仓库（默认 NousResearch/hermes-agent）
+#   UPSTREAM_REF    上游 ref（默认 main）
+#   WORK_DIR        构建工作目录（默认 $PWD/.build）
+#   OUTPUT_DIR      产物输出目录（默认 $PWD/dist）
+#   SKIP_BUNDLE=1  跳过渲染层构建（复用已有 dist-webapp）
+#
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+UPSTREAM_REPO="${UPSTREAM_REPO:-NousResearch/hermes-agent}"
+UPSTREAM_REF="${UPSTREAM_REF:-main}"
+WORK_DIR="${WORK_DIR:-${REPO_ROOT}/.build}"
+OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/dist}"
+FNPACK_VERSION="${FNPACK_VERSION:-1.2.3}"
+
+SRC_DIR="${WORK_DIR}/hermes-agent"
+FPK_DIR="${WORK_DIR}/fpk"
+DIST_WEBAPP="${SRC_DIR}/apps/desktop/dist-webapp"
+
+log() { printf '\033[0;36m[build]\033[0m %s\n' "$*"; }
+warn() { printf '\033[0;33m[warn]\033[0m %s\n' "$*" >&2; }
+die() { printf '\033[0;31m[fail]\033[0m %s\n' "$*" >&2; exit 1; }
+
+# ── 工具检查 ─────────────────────────────────────────────────────────────
+need() { command -v "$1" >/dev/null 2>&1 || die "缺少依赖：$1（$2）"; }
+need git "请安装 git"
+need curl "请安装 curl"
+need tar "请安装 tar"
+need node "官方构建脚本需要 Node >= 26"
+
+NODE_MAJOR="$(node -v | sed 's/^v\([0-9]*\).*/\1/')"
+if [ "${NODE_MAJOR}" -lt 26 ]; then
+  die "Node 版本过低（当前 $(node -v)），官方 build-webapp.mjs 要求 >= 26"
+fi
+log "Node $(node -v)"
+
+mkdir -p "${WORK_DIR}" "${OUTPUT_DIR}"
+
+# ── 1. 上游源码 ─────────────────────────────────────────────────────────
+log "同步上游 ${UPSTREAM_REPO}@${UPSTREAM_REF}"
+if [ -d "${SRC_DIR}/.git" ]; then
+  git -C "${SRC_DIR}" fetch --depth 1 origin "${UPSTREAM_REF}"
+  git -C "${SRC_DIR}" reset --hard "origin/${UPSTREAM_REF}"
+else
+  rm -rf "${SRC_DIR}"
+  git clone --depth 1 --branch "${UPSTREAM_REF}" \
+    "https://github.com/${UPSTREAM_REPO}.git" "${SRC_DIR}"
+fi
+
+UPSTREAM_SHA="$(git -C "${SRC_DIR}" rev-parse --short HEAD)"
+UPSTREAM_DATE="$(git -C "${SRC_DIR}" log -1 --format=%cI)"
+log "上游 commit ${UPSTREAM_SHA} (${UPSTREAM_DATE})"
+
+# 版本号：浅克隆拿不到 tag，改用 GitHub API 查最新 release。
+# 当显式指定了 tag 形式的 ref 时直接采用。
+if [[ "${UPSTREAM_REF}" =~ ^v?[0-9] ]]; then
+  HERMES_VERSION="${UPSTREAM_REF#v}"
+  log "使用指定版本 ${HERMES_VERSION}"
+else
+  HERMES_VERSION="$(curl -fsSL --max-time 30 \
+    "https://api.github.com/repos/${UPSTREAM_REPO}/releases/latest" 2>/dev/null \
+    | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\{0,1\}\([^"]*\)".*/\1/p' | head -n 1)"
+  if [ -z "${HERMES_VERSION}" ]; then
+    HERMES_VERSION="$(date +%Y.%m.%d)"
+    warn "未能从 API 获取版本号，回退到 ${HERMES_VERSION}"
+  else
+    log "上游最新版本 ${HERMES_VERSION}"
+  fi
+fi
+
+# ── 2. 构建 Webapp 渲染层 ───────────────────────────────────────────────
+if [ "${SKIP_BUNDLE:-0}" = "1" ] && [ -f "${DIST_WEBAPP}/index.html" ]; then
+  log "跳过渲染层构建（复用已有产物）"
+else
+  log "准备 Node 依赖（跳过 Electron 二进制下载）"
+  ( cd "${SRC_DIR}" && node apps/desktop/scripts/build-webapp.mjs --deps-only )
+
+  log "构建 Webapp 渲染层"
+  ( cd "${SRC_DIR}" && node apps/desktop/scripts/build-webapp.mjs )
+fi
+
+if [ ! -f "${DIST_WEBAPP}/index.html" ]; then
+  die "渲染层构建失败：未生成 ${DIST_WEBAPP}/index.html"
+fi
+BUNDLE_FILES="$(find "${DIST_WEBAPP}" -type f | wc -l | tr -d ' ')"
+log "渲染层就绪：${BUNDLE_FILES} 个文件，$(du -sh "${DIST_WEBAPP}" | cut -f1)"
+
+# ── 3. 组装 fpk 目录 ────────────────────────────────────────────────────
+log "组装 fpk 目录"
+rm -rf "${FPK_DIR}"
+mkdir -p "${FPK_DIR}"
+cp -r "${REPO_ROOT}/packaging/fpk/." "${FPK_DIR}/"
+
+# 渲染层放进 app/webapp
+mkdir -p "${FPK_DIR}/app/webapp"
+cp -r "${DIST_WEBAPP}/." "${FPK_DIR}/app/webapp/"
+
+# 版本号写入 manifest
+if [ -f "${FPK_DIR}/manifest" ]; then
+  sed -i.bak "s|^version[[:space:]]*=.*|version               = ${HERMES_VERSION}|" "${FPK_DIR}/manifest"
+  sed -i.bak "s|^desc[[:space:]]*=.*|desc                  = Hermes 官方 Desktop 工作区的飞牛原生版。保留完整 Desktop 体验：对话流式输出、工具调用可视化、并排预览、文件浏览、Artifacts、定时任务、多 Profile、技能管理、终端栏、Git 审阅。基于官方 Webapp 形态（gateway 内建渲染层），无需 Electron，浏览器内即原生体验。上游 commit ${UPSTREAM_SHA}。|" "${FPK_DIR}/manifest"
+  rm -f "${FPK_DIR}/manifest.bak"
+fi
+
+# ── 4. 打包 ─────────────────────────────────────────────────────────────
+log "获取 fnpack"
+FNPACK="${WORK_DIR}/fnpack"
+if [ ! -x "${FNPACK}" ]; then
+  case "$(uname -m)" in
+    x86_64)  FNPACK_TARGET="linux-amd64" ;;
+    aarch64) FNPACK_TARGET="linux-arm64" ;;
+    *) die "不支持的架构：$(uname -m)" ;;
+  esac
+  curl -fsSL --retry 3 --max-time 300 \
+    -o "${FNPACK}" \
+    "https://static2.fnnas.com/fnpack/fnpack-${FNPACK_VERSION}-${FNPACK_TARGET}"
+  chmod +x "${FNPACK}"
+fi
+log "fnpack 已就绪（${FNPACK_VERSION}）"
+
+log "打包 fpk"
+( cd "${WORK_DIR}" && "${FNPACK}" build --directory "${FPK_DIR}" )
+
+FPK_OUT="$(find "${WORK_DIR}" -maxdepth 1 -name '*.fpk' -newermt '-5 minutes' | head -n 1)"
+[ -n "${FPK_OUT}" ] || FPK_OUT="$(find "${WORK_DIR}" -maxdepth 1 -name '*.fpk' | head -n 1)"
+[ -n "${FPK_OUT}" ] || die "未生成 fpk"
+
+FINAL="${OUTPUT_DIR}/hermes-desktop.fpk"
+cp -f "${FPK_OUT}" "${FINAL}"
+
+# ── 5. 校验与元信息 ─────────────────────────────────────────────────────
+SHA="$(sha256sum "${FINAL}" | cut -d' ' -f1)"
+SIZE="$(stat -c%s "${FINAL}" 2>/dev/null || stat -f%z "${FINAL}")"
+
+cat > "${OUTPUT_DIR}/build-info.json" <<EOF
+{
+  "version": "${HERMES_VERSION}",
+  "upstream_repo": "${UPSTREAM_REPO}",
+  "upstream_ref": "${UPSTREAM_REF}",
+  "upstream_sha": "${UPSTREAM_SHA}",
+  "upstream_date": "${UPSTREAM_DATE}",
+  "bundle_files": ${BUNDLE_FILES},
+  "fpk_name": "hermes-desktop.fpk",
+  "fpk_size": ${SIZE},
+  "fpk_sha256": "${SHA}",
+  "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
+
+log "完成：${FINAL}"
+log "  版本   ${HERMES_VERSION}（上游 ${UPSTREAM_SHA}）"
+log "  大小   ${SIZE} 字节"
+log "  SHA256 ${SHA}"

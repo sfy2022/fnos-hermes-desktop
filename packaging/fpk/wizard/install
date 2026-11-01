@@ -1,0 +1,67 @@
+[
+    {
+        "stepTitle": "访问账号",
+        "items": [
+            {
+                "type": "tips",
+                "helpText": "<b>Hermes Desktop（飞牛版）</b><br>官方桌面端工作区的飞牛原生版，保留完整 Desktop 体验：对话流式输出、工具调用可视化、并排预览、文件浏览、Artifacts、定时任务、多 Profile、技能管理与终端栏。<br><br>本应用内置官方渲染层，<b>无需在 NAS 上运行 Electron</b>，桌面图标点击即在飞牛窗口内打开。"
+            },
+            {
+                "type": "text",
+                "field": "wizard_web_user",
+                "label": "访问用户名",
+                "initValue": "admin",
+                "rules": [
+                    { "required": true, "message": "请填写访问用户名" }
+                ]
+            },
+            {
+                "type": "password",
+                "field": "wizard_web_pass",
+                "label": "访问密码（留空则随机生成）",
+                "initValue": "",
+                "placeholder": "建议至少 12 位，含字母与数字",
+                "rules": [
+                    { "required": false, "message": "留空将自动生成随机强密码" }
+                ]
+            },
+            {
+                "type": "tips",
+                "helpText": "<br>本应用在局域网内监听 <code>9120</code> 端口，<b>必须设置访问密码</b>以防他人未授权使用 Agent（登录后的用户可以执行命令、读写文件）。<br>若留空，系统会生成随机密码，可在应用数据目录的 <code>access-info.txt</code> 中查看。"
+            }
+        ]
+    },
+    {
+        "stepTitle": "网络配置",
+        "items": [
+            {
+                "type": "tips",
+                "helpText": "首次安装需联网下载 Python 运行时与 Hermes Agent 源码。<br>若你的 NAS 无法直连 GitHub，请选择代理；国内 PyPI 镜像在此场景下可能缺少依赖元数据，选「官方」最稳妥。"
+            },
+            {
+                "type": "select",
+                "field": "wizard_github_proxy",
+                "label": "GitHub 下载通道（获取 Hermes 源码）",
+                "initValue": "auto",
+                "options": [
+                    { "label": "自动探测（推荐，依次尝试多个来源）", "value": "auto" },
+                    { "label": "gh-proxy.com 代理", "value": "ghproxy" },
+                    { "label": "ghproxy.net 代理", "value": "ghproxy_net" },
+                    { "label": "codeload 直连", "value": "codeload" },
+                    { "label": "github.com 直连（需要网络通畅）", "value": "direct" }
+                ]
+            },
+            {
+                "type": "select",
+                "field": "wizard_pypi_index",
+                "label": "Python 依赖下载源",
+                "initValue": "official",
+                "options": [
+                    { "label": "PyPI 官方（元数据完整，推荐）", "value": "official" },
+                    { "label": "清华 TUNA", "value": "tuna" },
+                    { "label": "阿里云", "value": "aliyun" }
+                ]
+            }
+        ]
+    }
+]

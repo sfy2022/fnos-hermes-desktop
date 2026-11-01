@@ -1,0 +1,11 @@
+[
+    {
+        "stepTitle": "升级说明",
+        "items": [
+            {
+                "type": "tips",
+                "helpText": "升级将更新 Hermes Agent 运行时与内置渲染层。<br>会话记录、记忆、技能与配置均会保留。"
+            }
+        ]
+    }
+]

@@ -1,0 +1,7 @@
+{
+    "defaults": {
+        "run-as": "package"
+    },
+    "username": "hermes-desktop",
+    "groupname": "hermes-desktop"
+}

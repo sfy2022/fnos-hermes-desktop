@@ -1,0 +1,18 @@
+#!/bin/bash
+#
+# 升级前回调 — 停止运行中的服务，fnOS 会在升级后重新启动应用
+
+LOG_FILE="${TRIM_PKGVAR}/info.log"
+
+log_msg() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - [upgrade_init] $1" >> "${LOG_FILE}" 2>/dev/null || true
+}
+
+pkill -TERM -f "hermes gateway" 2>/dev/null || true
+pkill -TERM -f "hermes serve" 2>/dev/null || true
+sleep 1
+pkill -KILL -f "hermes gateway" 2>/dev/null || true
+pkill -KILL -f "hermes serve" 2>/dev/null || true
+
+log_msg "升级前已停止运行中的服务"
+exit 0

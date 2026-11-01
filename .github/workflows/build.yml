@@ -1,0 +1,125 @@
+name: 同步上游并构建
+
+# 触发条件：
+#   - schedule    每日同步上游并构建（UTC 03:17，避开整点高峰）
+#   - workflow_dispatch  手动触发（可指定上游 ref）
+#   - push        打包脚本变更时立即验证构建
+on:
+  schedule:
+    - cron: '17 3 * * *'
+      timezone: "Asia/Shanghai"
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: '上游 ref（分支或 tag，留空用 main）'
+        required: false
+        default: 'main'
+      skip_bundle:
+        description: '跳过渲染层构建（复用缓存）'
+        type: boolean
+        required: false
+        default: false
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/**'
+      - 'packaging/**'
+      - '.github/workflows/**'
+
+permissions:
+  contents: write
+
+# 同一时间只跑一个构建，避免并发发布冲突
+concurrency:
+  group: fnos-hermes-desktop-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: 构建 fpk
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出本仓库
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js 26
+        uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+          cache: npm
+          cache-dependency-path: hermes-agent/package-lock.json
+
+      - name: 记录环境
+        run: |
+          echo "node: $(node -v)"
+          echo "npm:  $(npm -v)"
+          echo "date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+      - name: 构建 fpk
+        env:
+          UPSTREAM_REF: ${{ github.event.inputs.upstream_ref || 'main' }}
+          SKIP_BUNDLE: ${{ github.event.inputs.skip_bundle && '1' || '0' }}
+        run: bash scripts/build.sh
+
+      - name: 校验产物
+        run: |
+          set -euo pipefail
+          test -f dist/hermes-desktop.fpk || { echo "缺少 fpk"; exit 1; }
+          test -f dist/build-info.json || { echo "缺少 build-info"; exit 1; }
+          ls -la dist/
+          cat dist/build-info.json
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: fnos-hermes-desktop-fpk
+          path: dist/
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: 发布到 Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ ! -f dist/build-info.json ]; then
+            echo "没有 build-info，跳过发布"
+            exit 0
+          fi
+          VERSION=$(python3 -c "import json;print(json.load(open('dist/build-info.json'))['version'])")
+          SHA=$(python3 -c "import json;print(json.load(open('dist/build-info.json'))['upstream_sha'])")
+          TAG="v${VERSION}"
+
+          # tag 已存在则只补传附件（支持重跑）
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} 已存在，更新附件"
+            gh release upload "${TAG}" dist/hermes-desktop.fpk dist/build-info.json --clobber
+          else
+            echo "创建 Release ${TAG}"
+            git tag -a "${TAG}" -m "Hermes ${VERSION} (upstream ${SHA})"
+            git push origin "refs/tags/${TAG}"
+
+            # notes 走文件，避免 YAML 多行标量里的特殊字符干扰解析
+            SHA256=$(sha256sum dist/hermes-desktop.fpk | cut -d' ' -f1)
+            {
+              echo "Hermes 官方 Desktop 工作区的飞牛原生版。"
+              echo
+              echo "上游仓库：NousResearch/hermes-agent"
+              echo "上游 commit：${SHA}"
+              echo
+              echo "安装方式：飞牛桌面 → 应用中心 → 手动安装 → 选择 hermes-desktop.fpk"
+              echo
+              echo "构建信息："
+              echo "- 版本：${VERSION}"
+              echo "- SHA256：${SHA256}"
+            } > release-notes.md
+
+            gh release create "${TAG}" \
+              dist/hermes-desktop.fpk \
+              dist/build-info.json \
+              --title "Hermes Desktop for fnOS ${VERSION}" \
+              --notes-file release-notes.md \
+              --verify-tag
+          fi

@@ -1,0 +1,13 @@
+{
+    ".url": {
+        "hermes-desktop.Application": {
+            "title": "Hermes Desktop",
+            "icon": "images/icon_{0}.png",
+            "type": "iframe",
+            "protocol": "http",
+            "port": "9120",
+            "url": "/",
+            "allUsers": false
+        }
+    }
+}
