@@ -71,6 +71,36 @@ is_port_in_use() {
 # 端口被占用时逐个探测备用端口，直到找到空闲的。
 # 注意：SERVICE_PORT 只是环境变量，gateway 真正读的是 config.yaml 里的 webapp.port，
 # 所以必须同步写回配置，否则改了变量也白改（gateway 仍会去抢被占用的端口）。
+# 找出占用指定 TCP 端口的进程 PID（Linux，读 /proc）。
+is_port_in_use_pids() {
+    local port="$1"
+    local inode="" pid="" fd="" link=""
+    # 端口的 socket inode 可从 /proc/net/tcp 里拿到（十六进制端口）
+    local hexport
+    hexport=$(printf '%04X' "${port}")
+    for f in /proc/net/tcp /proc/net/tcp6; do
+        [ -r "$f" ] || continue
+        while read -r _ local_addr _ _ _ _ _ _ _ inode_col _; do
+            case "$local_addr" in
+                *":${hexport}")
+                    inode="${inode_col}"
+                    [ -n "$inode" ] && [ "$inode" != "0" ] && printf '%s\n' "$inode"
+                    ;;
+            esac
+        done < "$f"
+    done | while read -r ino; do
+        for d in /proc/[0-9]*; do
+            pid="${d#/proc/}"
+            for fd in "$d"/fd/*; do
+                link=$(readlink "$fd" 2>/dev/null) || continue
+                case "$link" in
+                    *"socket:[${ino}]"*) printf '%s\n' "$pid"; break ;;
+                esac
+            done
+        done
+    done | sort -u
+}
+
 pick_port() {
     local cfg="${DATA_DIR}/config.yaml"
     local candidate
@@ -80,21 +110,34 @@ pick_port() {
         return 0
     fi
 
-    # 该端口被别的服务占用（本机常见：另一个 Hermes 实例的 Docker 容器）
-    log_msg "[端口] ${SERVICE_PORT} 已被其他服务占用，自动改用备用端口"
+    # 该端口被占用 —— 不换端口。
+    #
+    # 桌面入口（app/ui/config 的 port）、网关适配层的 --upstream 都固定写
+    # ${SERVICE_PORT}，换成别的端口就全部对不上，表现正是「启动成功但
+    # 端口不监听」→ fnOS 报「启动失败」。
+    # 而且旧实现会把备用端口永久写进 config.yaml，一次临时占用就让端口
+    # 永久漂移（曾漂到 29220 再也回不来）。
+    #
+    # 正确做法：先清理占用者（同 home 的残留 Hermes），清不掉就明确失败。
+    log_msg "[端口] ${SERVICE_PORT} 已被占用，尝试清理残留实例"
 
-    for candidate in $(seq 29220 29259); do
-        if ! is_port_in_use "${candidate}"; then
-            SERVICE_PORT="${candidate}"
-            log_msg "[端口] 改用 ${SERVICE_PORT}"
-            break
-        fi
+    local stale
+    for stale in $(is_port_in_use_pids "${SERVICE_PORT}"); do
+        log_msg "[端口] 结束残留进程 ${stale}"
+        kill -TERM "${stale}" 2>/dev/null || true
     done
+    sleep 3
+    for stale in $(is_port_in_use_pids "${SERVICE_PORT}"); do
+        kill -KILL "${stale}" 2>/dev/null || true
+    done
+    sleep 1
 
     if is_port_in_use "${SERVICE_PORT}"; then
-        log_msg "[端口] 29220-29259 均被占用，仍使用 ${SERVICE_PORT}（启动可能失败）"
+        log_msg "[端口] ${SERVICE_PORT} 仍被占用，且不是本应用的残留实例"
+        log_msg "[端口] 请先停用占用该端口的服务（可能是 Docker 容器），再启动本应用"
         return 1
     fi
+    log_msg "[端口] 已清理，继续使用 ${SERVICE_PORT}"
 
     # 把新端口写回配置，让 gateway 真正用上
     if [ -f "${cfg}" ]; then
@@ -132,7 +175,18 @@ ensure_webapp_config() {
     [ -f "${cfg}" ] || printf '# Hermes Agent 配置\n' > "${cfg}"
 
     if grep -q "^webapp:" "${cfg}" 2>/dev/null; then
-        log_msg "config.yaml 已含 webapp 配置"
+        # 已有 webapp 段：把端口同步成本次使用的端口。
+        # 不同步会导致「配置里的端口」与「桌面入口/适配层使用的端口」不一致，
+        # 典型症状就是启动后 ${SERVICE_PORT} 不监听、fnOS 报启动失败。
+        local cfg_port
+        cfg_port="$(sed -n '/^webapp:/,/^[^[:space:]]/p' "${cfg}" 2>/dev/null \
+            | grep -E "^[[:space:]]*port:" | head -n 1 | grep -oE '[0-9]+')"
+        if [ -n "${cfg_port}" ] && [ "${cfg_port}" != "${SERVICE_PORT}" ]; then
+            sed -i "/^webapp:/,/^[^[:space:]]/ s/^\([[:space:]]*port:[[:space:]]*\)[0-9]\{1,5\}/\1${SERVICE_PORT}/" "${cfg}" 2>/dev/null || true
+            log_msg "config.yaml 端口已从 ${cfg_port} 同步为 ${SERVICE_PORT}"
+        else
+            log_msg "config.yaml 已含 webapp 配置"
+        fi
         return 0
     fi
 

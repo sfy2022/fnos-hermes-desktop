@@ -682,6 +682,15 @@ def _ensure_upstream(command: str, cwd: str, host: str, port: int) -> None:
     log("等待上游超时")
 
 
+#: 一次性启动链接的缓存：(path, 取到的时间)。Hermes 的 launch 链接是
+#: 一次性且互斥的 —— 每次申请都会让上一个失效。浏览器打开首页时往往伴
+#: 随 favicon 等并发请求，若每次都申请新的，浏览器手里那个立刻作废，
+#: 于是看到 "This launch link was already used or has expired"。
+#: 所以短时间内的请求必须复用同一个链接。
+_LAUNCH_CACHE: dict[str, tuple[str, float]] = {}
+_LAUNCH_TTL = 90.0
+
+
 def _launch_path(hermes_home: str) -> str:
     """向 gateway 控制 socket 申请一次性启动链接，返回其 path+query。
 
@@ -695,11 +704,18 @@ def _launch_path(hermes_home: str) -> str:
     因此由适配层代取。注意返回的 url 指向 127.0.0.1:9120，浏览器访问不到，
     这里只取它的 path+query，由本层用相对路径重定向回去，保持同源。
     """
+    import time
+
     if not hermes_home:
         # 没显式指定时，从脚本自身位置推断：适配层被部署在应用数据目录，
         # 那里就有 gateway.sock。这样即便旧版 cmd/main 没传 --hermes-home
         # （cmd/ 目录是 root 只读，升级前无法替换），也能正常工作。
         hermes_home = os.path.dirname(os.path.abspath(__file__))
+
+    # 命中缓存且未过期就直接复用
+    cached = _LAUNCH_CACHE.get(hermes_home)
+    if cached and (time.monotonic() - cached[1]) < _LAUNCH_TTL:
+        return cached[0]
     sock_path = os.path.join(hermes_home, "gateway.sock")
     if not os.path.exists(sock_path):
         return ""
@@ -742,6 +758,8 @@ def _launch_path(hermes_home: str) -> str:
                 path = f"{path}?{frag}"
             else:
                 path = f"{path}#{frag}"
+
+        _LAUNCH_CACHE[hermes_home] = (path, time.monotonic())
         return path
     except Exception as exc:
         log(f"申请启动链接失败：{exc}")
