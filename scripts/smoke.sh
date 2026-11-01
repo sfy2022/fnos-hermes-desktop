@@ -74,14 +74,21 @@ cp -r "${REPO_ROOT}/packaging/fpk/." "${WORK_DIR}/fpk/"
 printf '<!doctype html><title>smoke</title>\n' > "${WORK_DIR}/fpk/app/webapp/index.html"
 
 FNPACK="${WORK_DIR}/fnpack"
-case "$(uname -m)" in
-  x86_64)  T="linux-amd64" ;;
-  aarch64) T="linux-arm64" ;;
-  *) echo "跳过打包（架构 $(uname -m) 无预编译 fnpack）"; exit 0 ;;
+case "$(uname -s)" in
+  Linux)
+    case "$(uname -m)" in
+      x86_64)  T="linux-amd64" ;;
+      aarch64) T="linux-arm64" ;;
+      *) echo "跳过打包（架构 $(uname -m) 无预编译 fnpack）"; exit 0 ;;
+    esac
+    ;;
+  MINGW*|MSYS*|CYGWIN*) T="windows-amd64" ;;
+  Darwin) T="darwin-amd64" ;;
+  *) echo "跳过打包（系统 $(uname -s) 无预编译 fnpack）"; exit 0 ;;
 esac
 curl -fsSL --retry 2 --max-time 120 -o "${FNPACK}" \
   "https://static2.fnnas.com/fnpack/fnpack-1.2.3-${T}" || die "fnpack 下载失败"
-chmod +x "${FNPACK}"
+chmod +x "${FNPACK}" 2>/dev/null || true
 ( cd "${WORK_DIR}" && "${FNPACK}" build --directory "${WORK_DIR}/fpk" ) || die "打包失败"
 
 log "5/5 校验产物"
