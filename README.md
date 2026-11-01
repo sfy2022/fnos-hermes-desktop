@@ -28,6 +28,38 @@ Hermes 官方桌面端（Electron）的渲染层有两套构建产物：
 
 ---
 
+## 两种打开方式
+
+安装后桌面上会出现对应图标，两种方式访问**同一个后端、同一份会话**：
+
+| 方式 | 地址 | 鉴权 | 适用场景 |
+|---|---|---|---|
+| **网页入口（推荐）** | `http://<NAS_IP>:9120` | Hermes 自身 `basic_auth`，登录一次后浏览器记住 | 手机、平板、其他电脑 |
+| **桌面内嵌（实验性）** | 飞牛统一网关 `/app/hermes-desktop` | 飞牛登录态 | 想在飞牛窗口内使用 |
+
+### 为什么内嵌标注为实验性
+
+Desktop 工作区依赖一条 WebSocket（前端称之为 *Desktop IPC bridge*）承载工具调用与流式输出。
+内嵌入口经飞牛统一网关代理，这条 WS 需要满足三个条件才能通：
+
+1. 网关**透传 `Upgrade: websocket`**（部分版本不支持）
+2. 代理层能把前端的所有路由正确挂到子路径下（本项目已通过改写
+   `window.__HERMES_BASE_PATH__` 解决）
+3. WS 端点接受的会话凭证在子路径下仍有效
+
+其中第 1、3 项依赖飞牛网关实现，本项目无法完全控制。若页面提示
+`Desktop IPC bridge is unavailable`，请改用网页入口 —— 它不经过网关，功能完整。
+
+---
+
+## 首次使用
+
+1. 点图标打开（网页入口需登录，见安装时设置的密码）
+2. 首次进入是**模型接入向导**：选自己的 API Key，或先点「稍后选择」
+3. 之后即可新建会话对话。`hermes doctor` 可随时体检
+
+---
+
 ## 功能
 
 与官方 Desktop Webapp 一致（官方文档 `user-guide/desktop.md`）：
@@ -96,9 +128,23 @@ Hermes 官方桌面端（Electron）的渲染层有两套构建产物：
 
 ⚠️ **登录后的用户等同于授予本机命令执行权限**（能跑 terminal 工具、读写文件、访问凭据）。
 
-- 本应用默认绑定 `0.0.0.0:9120` 并**强制密码认证**（`host: 0.0.0.0` 会触发 dashboard 登录门）
+- 本应用绑定 `0.0.0.0:9120`，因此 **Hermes 强制要求配置认证** ——
+  上游 `should_require_auth()` 只看绑定地址，非回环即启用认证门。
+  若 `config.yaml` 里没有 `dashboard.basic_auth`，Hermes 会**拒绝启动 webapp**：
+  gateway 主循环照跑、进程活着、端口却不监听，外部表现就是「打不开 / 502」。
+  日志原文：`Refusing to bind dashboard to 0.0.0.0 — the auth gate engages on
+  non-loopback binds, but no auth providers are registered`
 - **切勿直接暴露到公网**。需要外网访问请用 VPN / Tailscale，或反代 + HTTPS
-- 改密码：编辑应用数据目录的 `config.yaml` 中 `dashboard.basic_auth`，然后重启应用
+- 改密码：`dashboard.basic_auth.password_hash` 要求 **scrypt 哈希，不能写明文**：
+
+  ```bash
+  cd /vol1/@appdata/hermes-desktop
+  HERMES_PW='你的新密码' PYTHONPATH=src venv/bin/python3 -c \
+    'import os; from plugins.dashboard_auth.basic import hash_password; \
+     print(hash_password(os.environ["HERMES_PW"]))'
+  ```
+
+  把输出写进 `config.yaml` 的 `password_hash`，然后重启应用。
 
 ---
 
@@ -129,6 +175,61 @@ UPSTREAM_REF=v0.22.5   # 构建指定上游版本
 SKIP_BUNDLE=1          # 复用已有渲染层
 OUTPUT_DIR=/path/out   # 指定输出目录
 ```
+
+---
+
+## 常见问题
+
+### 点「启动」报错 / 打不开 / 502
+
+**先看 Hermes 自己的日志**，而不是安装脚本的 info.log：
+
+```bash
+tail -50 /vol1/@appdata/hermes-desktop/logs/gateway.log
+```
+
+安装脚本的 `info.log` 往往只有一行启动横幅 —— 因为进程可能在**日志初始化之前**就退出了。
+
+最常见的两个原因：
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| `Refusing to bind dashboard to 0.0.0.0` | `config.yaml` 绑了 `0.0.0.0` 但缺 `dashboard.basic_auth` | 补上 `basic_auth`（见「安全」节），或改绑 `127.0.0.1` |
+| 启动横幅一闪而过、无任何报错 | 数据目录里混入了**非应用属主**的文件 | 见下条 |
+
+### 数据目录混入其他用户属主的文件
+
+Hermes 以 `hermes-desktop` 身份运行。若用其他账号（比如 SSH 登录的管理员）
+手工跑过 `hermes`，会留下 `sun` 属主的文件 —— `webapp/session-token`、
+`gateway.lock`、`tools/` 等。应用身份读写不了这些文件，**会在日志初始化之前
+静默退出**，日志里一行错都没有。
+
+排查与修复（需 root 或应用身份）：
+
+```bash
+# 找出不是应用属主的条目
+find /vol1/@appdata/hermes-desktop ! -user hermes-desktop
+
+# 删掉让应用身份重建（先确认没有重要数据）
+```
+
+**教训：不要用别的账号手动跑 Hermes。** 排障请用 Web UI 的终端栏（那里是应用身份）。
+
+### 内嵌窗口提示 `Desktop IPC bridge is unavailable`
+
+这是 WebSocket 没通。内嵌入口经飞牛网关代理，需要网关透传 `Upgrade: websocket`。
+**改用网页入口即可**，它不经过网关。
+
+### 内嵌登录后跳到飞牛桌面
+
+Hermes 前端用 `window.__HERMES_BASE_PATH__` 拼所有路由。上游注入的是空串
+（站点根），在网关子路径下 `location.href = basePath + "/"` 就落到 `/` —— 也就是飞牛桌面。
+本项目在 `rewrite_html` 里把它改写为网关前缀，已修复。若仍出现，检查适配层是否加载了新脚本。
+
+### 安装时报 `A directory already exists at .../venv`
+
+卸载时选了「保留数据」或卸载中断，`venv` 残留。新版本已用 `uv venv --clear`
+并加了残留兜底；旧包可手动 `rm -rf /vol1/@appdata/hermes-desktop/venv` 后重装。
 
 ---
 

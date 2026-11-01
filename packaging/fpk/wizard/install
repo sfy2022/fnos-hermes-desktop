@@ -4,11 +4,11 @@
         "items": [
             {
                 "type": "tips",
-                "helpText": "<b>Hermes Desktop（飞牛版）</b><br>官方桌面端工作区的飞牛原生版，保留完整 Desktop 体验：对话流式输出、工具调用可视化、并排预览、文件浏览、Artifacts、定时任务、多 Profile、技能管理与终端栏。<br><br>本应用内置官方渲染层，<b>无需在 NAS 上运行 Electron</b>，桌面图标点击即在飞牛窗口内打开。"
+                "helpText": "<b>Hermes Desktop（飞牛版）</b><br>NousResearch 出品的 AI Agent 工作区，完整运行在飞牛 NAS 上。<br><br><b>它是什么</b><br>不是只会聊天的对话框，而是能动手干活的助手：执行命令、读写文件、浏览网页、跑定时任务、管理多个项目。对话流式输出、工具调用可视化、并排预览、Artifacts、多 Profile、技能管理与内置终端栏一应俱全。<br><br><b>两种打开方式</b><br>· <b>网页入口（推荐）</b> —— 点图标用浏览器打开 <code>局域网地址:9120</code>，手机、平板、其他电脑都能连，首次登录一次即可，之后浏览器会记住<br>· <b>桌面内嵌（实验性）</b> —— 尝试在飞牛窗口内直接打开。该路径依赖飞牛统一网关代理 WebSocket，部分环境可能提示「Desktop IPC bridge is unavailable」，遇到时请改用网页入口"
             },
             {
                 "type": "tips",
-                "helpText": "<br>本应用在局域网内监听 <code>9120</code> 端口，<b>需要设置访问密码</b>以防他人未授权使用 Agent（登录后的用户可以执行命令、读写文件）。<br>若留空，系统会生成随机密码，可在应用数据目录的 <code>access-info.txt</code> 中查看。"
+                "helpText": "<br><b>先设一个访问密码</b><br>这个 Agent 登录后<b>可以执行命令、读写文件</b>，等同于给 NAS 开了一个操作入口，所以网页入口必须设密码。<br>· 登录一次后浏览器会记住，日常点图标不必反复输入<br>· 留空则自动生成随机强密码，可在应用数据目录的 <code>access-info.txt</code> 查看"
             },
             {
                 "type": "text",
