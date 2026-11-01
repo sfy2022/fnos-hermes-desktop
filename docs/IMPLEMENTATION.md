@@ -431,3 +431,73 @@ def get_skills_dir() -> Path:
 | 打包后 fpk | 22.9 MB |
 
 安装时按架构裁剪二进制，实际占用约 7.3 MB（x86_64）。
+
+
+---
+
+## 附录三：与官方安装脚本的关系
+
+### 官网的安装方式（Linux/macOS 与 Windows 不同）
+| 平台 | 命令 |
+|---|---|
+| macOS / Linux | `curl -fsSL https://hermes-agent.nousresearch.com/install.sh \| bash` |
+| Windows | `irm https://hermes-agent.nousresearch.com/install.ps1 \| iex` |
+
+官方 install.sh 共 1302 行，**只支持 Unix** —— 第 444 行明确：
+`fail "unsupported platform: $(uname -s). On Windows use install.ps1."`
+Windows 另有独立的 PowerShell 脚本，桌面版另有 Hermes-Setup.exe / .dmg 安装包。
+
+### install.sh 的阶段划分
+```
+prerequisites → repository → venv → python-deps → config
+              → products → setup → gateway → complete
+```
+- `--stage NAME` 可单独跑某一阶段
+- `--non-interactive` 跳过需要输入的阶段
+- `--include-desktop` 额外构建桌面应用（Electron）
+
+### 本 fpk 与官方脚本的关系
+fpk 走的是**另一种形态**：不执行 install.sh，而是自己实现 NAS 上的安装流程，
+但**依赖安装改用官方的 pm**（此前是手写 `uv pip install -e ".[all]"`）。
+
+关键改动原因 —— 上游 pm/AGENTS.md 明确写着：
+
+> The `[tool.uv] exclude-newer = "3 days"` release-age check covers **Hermes's own
+> dependencies only** ... It runs when Hermes LOCKS (`hermes pm lock`, CI's lock check),
+> **never on users' machines**: every generated workspace drops the cutoff
+> (`pm/workspace.py::_without_release_age`), so a mirror without upload times cannot
+> break an install (#135589).
+
+也就是说：本项目此前遇到的「国内镜像缺 upload-time → 依赖被全部过滤」
+（上游 issue #135589）**官方已在 pm 里修掉** —— pm 会主动剥离 exclude-newer。
+本 fpk 之前自己写 `--exclude-newer 2027-01-01` 来绕过，属于过时做法。
+
+### 现在采用的安装流程
+```bash
+# 1. uv 建 Python 3.14 venv
+uv venv --python 3.14 ${VENV_DIR}
+
+# 2. 官方 pm 安装依赖（哈希锁定 + 自动剥离 exclude-newer）
+cd ${SRC_DIR} && ${VENV_DIR}/bin/python3 -m pm.cli install \
+    --without chromium --without cua-driver
+
+# 3. 回退（pm 不可用时）
+uv pip install --python ${VENV_DIR}/bin/python3 \
+    --exclude-newer 2027-01-01 -e ".[web]"
+```
+
+NAS 上不需要浏览器自动化与计算机视觉驱动，用 `--without chromium --without cua-driver`
+跳过，可省下数百 MB 与不少安装时间。
+
+实测（NAS）：
+```
+✓ pm.cli 导入成功
+✓ exclude-newer 剥离生效: True
+✓ pm install --help 确认参数：--without chromium / --without cua-driver
+```
+
+### 为什么不用官方的 setup 与 gateway install
+- `hermes setup` 是交互式向导（需 TTY）；fpk 的安装向导已收集好配置，
+  直接写 config.yaml 更可控（要精确设定 webapp.host/port 与 basic_auth）
+- `hermes gateway install` 装的是 systemd 用户服务；fnOS 用自己的
+  应用生命周期管理（install_callback / cmd/main）管理进程

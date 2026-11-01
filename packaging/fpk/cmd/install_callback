@@ -336,16 +336,15 @@ fetch_source() {
 install_hermes() {
     export UV_CACHE_DIR="${DATA_DIR}/.uv-cache"
     export UV_PYTHON_INSTALL_DIR="${DATA_DIR}/pythons"
-    # 依赖解析需要完整的 upload-time 元数据：国内镜像普遍缺失，会被 uv 的
-    # exclude-newer 全部过滤掉，因此默认用官方源。
+    # PyPI 源选择。pm 路径会自动剥离 exclude-newer，因此镜像缺
+    # upload-time 元数据也能装（上游 issue #135589）；uv 回退路径仍需
+    # 完整元数据，默认用官方源最稳。
     case "${wizard_pypi_index:-official}" in
     tuna)   export UV_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple" ;;
     aliyun) export UV_INDEX_URL="https://mirrors.aliyun.com/pypi/simple" ;;
     *)      export UV_INDEX_URL="https://pypi.org/simple" ;;
     esac
     log_msg "PyPI 源：${UV_INDEX_URL}"
-    # 显式放宽 uv 的默认 exclude-newer（其构建日会误伤新版本依赖）
-    local EXCLUDE="--exclude-newer 2027-01-01"
 
     if [ ! -x "${VENV_DIR}/bin/hermes" ]; then
         log_msg "创建 Python 3.14 虚拟环境 ..."
@@ -361,14 +360,40 @@ install_hermes() {
         log_msg "Python 版本：$("${VENV_DIR}/bin/python3" --version 2>&1)"
     fi
 
-    log_msg "editable 安装 hermes-agent[all] ..."
-    ( cd "${SRC_DIR}" && "${UV_BIN}" pip install --python "${VENV_DIR}/bin/python3" \
-        ${EXCLUDE} -e ".[all]" ) >>"${LOG_FILE}" 2>&1
+    # 优先用官方包管理器 pm 安装。
+    # 为什么不直接用 uv pip install：
+    #   * pm 会按 pm/lock.json 做哈希校验锁定依赖版本
+    #   * pm 在生成的 workspace 里主动剥离 [tool.uv] exclude-newer
+    #     （上游 pm/workspace.py::_without_release_age），因此不需要
+    #     国内镜像提供 upload-time 元数据 —— 这正是原先依赖被全部
+    #     过滤掉的根因（上游 issue #135589）
+    #   * pm 会一并处理可执行入口发布、附加包等收尾工作
+    # NAS 上不需要浏览器与计算机视觉驱动，用 --without 跳过，省空间也省时间。
+    local pm_ok=0
+    if [ -d "${SRC_DIR}/pm" ]; then
+        log_msg "使用官方 pm 安装依赖（跳过 chromium 浏览器与 cua-driver 视觉驱动）..."
+        ( cd "${SRC_DIR}" && "${VENV_DIR}/bin/python3" -m pm.cli install \
+            --without chromium --without cua-driver ) >>"${LOG_FILE}" 2>&1 && pm_ok=1
+        if [ "${pm_ok}" != "1" ]; then
+            log_msg "pm install 未成功，回退 uv（详见 ${LOG_FILE}）"
+        fi
+    else
+        log_msg "源码中无 pm 模块，回退 uv 安装"
+    fi
 
-    if [ ! -x "${VENV_DIR}/bin/hermes" ]; then
-        log_msg "[all] 安装失败，回退 [web] extra"
+    if [ "${pm_ok}" != "1" ]; then
+        # 回退路径：直接用 uv。显式放宽 exclude-newer（uv 默认按自身构建日
+        # 截断，会误伤刚发布的依赖版本），并强制走完整 upload-time 元数据的源。
+        local EXCLUDE="--exclude-newer 2027-01-01"
+        log_msg "editable 安装 hermes-agent[web] ..."
         ( cd "${SRC_DIR}" && "${UV_BIN}" pip install --python "${VENV_DIR}/bin/python3" \
             ${EXCLUDE} -e ".[web]" ) >>"${LOG_FILE}" 2>&1
+    fi
+
+    if [ ! -x "${VENV_DIR}/bin/hermes" ]; then
+        log_msg "web extra 安装失败，尝试 all extra ..."
+        ( cd "${SRC_DIR}" && "${UV_BIN}" pip install --python "${VENV_DIR}/bin/python3" \
+            --exclude-newer 2027-01-01 -e ".[all]" ) >>"${LOG_FILE}" 2>&1
     fi
 
     if [ ! -x "${VENV_DIR}/bin/hermes" ]; then
