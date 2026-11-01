@@ -182,21 +182,16 @@ fi
 BUNDLE_FILES="$(find "${DIST_WEBAPP}" -type f | wc -l | tr -d ' ')"
 log "渲染层就绪：${BUNDLE_FILES} 个文件，$(du -sh "${DIST_WEBAPP}" | cut -f1)"
 
-# ── 2c. 校验分发副本与源码一致 ──────────────────────────────────────────
-# scripts/ 下是开发用的源，packaging/fpk/cmd/ 下是随包分发的副本。
-# 两者必须一致，否则会出现「改了源码但包里还是旧版」这类难查的问题
-# （此前就漏同步过一次，导致 bridge 注入逻辑没进包）。
-for pair in "gateway_proxy.py" "fnos_bridge.py"; do
-    src_file="${REPO_ROOT}/scripts/${pair}"
+# ── 2c. 校验运行时脚本完整且语法正确 ────────────────────────────────────
+# packaging/fpk/cmd/ 下的 .py 是随包分发的运行时脚本，唯一来源就在这里
+# （不再与 scripts/ 放副本，避免「改了源码没同步」这类问题）。
+for pair in "gateway_proxy.py" "fnos_bridge.py" "pause_gateway.py"; do
     dist_file="${REPO_ROOT}/packaging/fpk/cmd/${pair}"
-    if [ -f "${src_file}" ] && [ -f "${dist_file}" ]; then
-        # 忽略行尾差异（Windows 开发环境是 CRLF，Linux 上是 LF）
-        if ! diff -q --strip-trailing-cr "${src_file}" "${dist_file}" >/dev/null 2>&1; then
-            die "${pair} 与 packaging/fpk/cmd/ 下的分发副本不一致，请先同步：cp scripts/${pair} packaging/fpk/cmd/${pair}"
-        fi
-    fi
+    [ -f "${dist_file}" ] || die "缺少运行时脚本：${dist_file}"
+    PYTHONPYCACHEPREFIX=/tmp/.build-pycache python3 -m py_compile "${dist_file}" \
+        2>/dev/null || die "Python 语法错误：${dist_file}"
 done
-log "分发副本一致性校验通过"
+log "运行时脚本校验通过"
 
 # ── 3. 组装 fpk 目录 ────────────────────────────────────────────────────
 log "组装 fpk 目录"
