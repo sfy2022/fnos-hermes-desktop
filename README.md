@@ -10,6 +10,24 @@
 
 ---
 
+## 下载安装
+
+**[⬇️ 前往 Releases 下载最新 fpk](https://github.com/sfy2022/fnos-hermes-desktop/releases/latest)**
+
+1. 打开上面的 Releases 页面，在 **Assets** 里下载 `Hermes-Desktop-fnOS-v<版本>-<commit>.fpk`（约 22 MB，x86_64）
+2. 飞牛桌面 → **应用中心** → 右上角 **手动安装** → 选择刚下载的 `.fpk`
+3. 安装完成后桌面出现两个图标：**Hermes Desktop**（网页入口，推荐）与 **Hermes Desktop (桌面内嵌)**（实验性）
+4. 首次访问 `http://<NAS_IP>:9120`，用 `admin` / `12345678` 登录，**登录后请立刻在设置里改密码**
+
+> 安装/升级包同时托管在 Gitea：[git.ssjz.fun/sunfu/fnos-hermes-desktop](https://git.ssjz.fun/sunfu/fnos-hermes-desktop/releases)
+>
+> 没有看到 Releases / 只有源码压缩包？说明该次构建的发布步骤被仓库权限拦住了，
+> 见 [常见问题 · 为什么没有 fpk 下载](#为什么-releases-里没有-fpk-下载)。
+
+> 想自己构建？见 [本地构建](#本地构建)。
+
+---
+
 ## 这是什么
 
 Hermes 官方桌面端（Electron）的渲染层有两套构建产物：
@@ -232,6 +250,25 @@ OUTPUT_DIR=/path/out   # 指定输出目录
 ---
 
 ## 常见问题
+
+### 为什么 Releases 里没有 fpk 下载
+
+典型症状：Actions 里构建**全绿**，但 Releases 页面空空如也，只有 `Source code (zip/tar.gz)`。
+
+原因不是构建失败，而是**发布那一步没有写权限**。GitHub 对仓库级
+`Settings → Actions → General → Workflow permissions` 有一个开关，默认是
+**Read repository contents**，它会**覆盖** workflow 文件里声明的 `permissions: contents: write`，
+于是创建 Release 的 API 调用返回 403。
+
+修复（一次性，20 秒）：
+
+1. 仓库 **Settings → Actions → General**
+2. 拉到底 **Workflow permissions** → 选 **Read and write permissions** → **Save**
+3. **Actions → 同步上游并构建 → Run workflow** 重跑一次
+
+产物就会自动出现在 Releases 里。若暂时不想改权限，也可以在 **Releases → Draft a new release**
+手动选 tag、把本地产出的 fpk 拖进去发布；或者直接下载 Actions 页面底部 **Artifacts** 里的
+`fnos-hermes-desktop-fpk`（需登录，保留 30 天）。
 
 ### 点「启动」报错 / 打不开 / 502
 

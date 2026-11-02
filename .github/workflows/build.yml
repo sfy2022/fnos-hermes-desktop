@@ -106,16 +106,21 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      # 发布失败不应把「构建成功」也拖红 —— 产物已在上一步作为 artifact 上传，
-      # 任何人都能下载。release 只是便利，缺权限/网络时让它自己红一条就够了。
+      # 发布失败不应把「构建成功」也拖红 —— 产物已在上一步作为 artifact 上传。
+      # 但「没有 Release 就没有下载」，所以失败时必须留下醒目的 error 注解，
+      # 否则很容易出现「构建全绿但 Releases 页空空」的困惑。
+      #
+      # 注意：这里不再单独 git push tag。POST /releases 的 tag_name 若不存在，
+      # GitHub/Gitea 都会自动从默认分支创建 tag —— 少一个动作就少一个 403 失败点。
       - name: 发布到 Releases
+        id: release
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           if [ ! -f dist/build-info.json ]; then
             echo "没有 build-info，跳过发布"
             exit 0
@@ -126,38 +131,42 @@ jobs:
           TAG="v${VERSION}"
 
           FPK_FILE=$(ls dist/Hermes-Desktop-fnOS-v*.fpk 2>/dev/null | head -1)
-          [ -n "${FPK_FILE}" ] || { echo "找不到规范化后的产物"; exit 1; }
+          [ -n "${FPK_FILE}" ] || { echo "::error::找不到规范化后的产物"; exit 1; }
           SHA256=$(sha256sum "${FPK_FILE}" | cut -d' ' -f1)
+          SIZE=$(du -h "${FPK_FILE}" | cut -f1)
           {
             echo "Hermes 官方 Desktop 工作区的飞牛原生版。"
             echo
-            echo "上游仓库：NousResearch/hermes-agent"
-            echo "上游 commit：${SHA}"
+            echo "**下载**：本页 Assets 中的 \`$(basename "${FPK_FILE}")\`（${SIZE}）"
             echo
-            echo "安装方式：飞牛桌面 → 应用中心 → 手动安装 → 选择 hermes-desktop.fpk"
+            echo "**安装**：飞牛桌面 → 应用中心 → 手动安装 → 选择该 fpk"
             echo
-            echo "构建信息："
-            echo "- 版本：${VERSION}"
-            echo "- SHA256：${SHA256}"
+            echo "---"
+            echo
+            echo "上游仓库：NousResearch/hermes-agent  "
+            echo "上游 commit：\`${SHA}\`"
+            echo
+            echo "| 项目 | 值 |"
+            echo "| --- | --- |"
+            echo "| 版本 | ${VERSION} |"
+            echo "| SHA256 | \`${SHA256}\` |"
+            echo "| 架构 | x86_64 |"
           } > release-notes.md
-
-          # 打 tag（已存在则复用）
-          if ! git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
-            git tag -a "${TAG}" -m "Hermes ${VERSION} (upstream ${SHA})"
-            # 推 tag 需要 GITHUB_TOKEN 有 contents:write。workflow 已声明，
-            # 但仓库级 Settings → Actions → Workflow permissions 若为只读，
-            # 会覆盖声明 —— 那时这里会 403，属预期，不影响 artifact。
-            git push origin "refs/tags/${TAG}" || \
-              echo "::warning::推 tag 被拒，请把仓库 Actions 权限改成 Read and write"
-          fi
 
           # 仓库标识：Gitea 与 GitHub 都提供 GITHUB_REPOSITORY
           REPO_FULL="${GITHUB_REPOSITORY:-}"
 
           # 发布逻辑放在独立脚本里，避免 YAML 嵌套引号踩坑
-          python3 scripts/publish_release.py \
+          if ! python3 scripts/publish_release.py \
             --repo "${REPO_FULL}" \
             --tag "${TAG}" \
             --title "Hermes Desktop for fnOS ${VERSION}" \
             --notes-file release-notes.md \
-            --assets "${FPK_FILE}" dist/build-info.json
+            --assets "${FPK_FILE}" dist/build-info.json; then
+            echo "::error::Release 发布失败（多半是 GITHUB_TOKEN 只有只读权限）。请到 Settings → Actions → General → Workflow permissions 选择 “Read and write permissions” 后重跑。"
+            exit 1
+          fi
+
+          echo "RELEASE_URL=${GITHUB_SERVER_URL}/${REPO_FULL}/releases/tag/${TAG}" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- ✅ Release：${GITHUB_SERVER_URL}/${REPO_FULL}/releases/tag/${TAG}" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- 📦 产物：$(basename "${FPK_FILE}")（${SIZE}）" >> "${GITHUB_STEP_SUMMARY}"
