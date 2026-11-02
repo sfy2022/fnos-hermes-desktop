@@ -317,9 +317,36 @@ cn / haptic / icons / useValue / useQuery / usePluginI18n`。
 | 6 | 安装阶段拿不到 `TRIM_SERVICE_PORT` | 以 manifest 的 `service_port` 兜底 |
 | 7 | fnOS 的 `wizard/*` 必须是 JSON 数组 | 严格按数组结构生成 |
 | 8 | `webapp --status` 报 "off" 是假象 | 以端口是否监听为准，不看该状态 |
+| 9 | CI 全绿但 Releases 页空空，没有 fpk 可下 | 仓库级 Workflow permissions 默认只读，**覆盖** workflow 里的 `permissions: contents: write`；创建 Release 的 API 因此 403 |
 
 构建需要 **Node ≥ 26**（官方 build 脚本要求）。e5 上备有 `/tmp/node26` 与
 `/tmp/extra-libs`（glibc 补丁），完整命令见 `scripts/build.sh`。
+
+### 坑 K：构建全绿 ≠ 有东西可下载
+
+这是本项目交付上最容易被忽略的一环，值得单独说明。
+
+现象：Actions 里 job 绿色、artifact 存在，但 **Releases 页面只有 `Source code (zip/tar.gz)`**，
+`git ls-remote --tags` 也查不到 CI 打的 tag。
+
+原因分两层，都指向同一个权限：
+
+1. `GITHUB_TOKEN` 的实际权限由 **仓库设置**
+   `Settings → Actions → General → Workflow permissions` 决定，默认是
+   *Read repository contents*。这个设置**优先于** workflow 文件里的
+   `permissions: contents: write` —— 声明写了也没用，推 tag 和建 Release 都返回 403。
+2. `continue-on-error: true` 让失败步骤在 UI 上仍显示为绿色
+   （API 里 `conclusion` 是 `success`、`outcome` 才是 `failure`），
+   于是「发布失败」被彻底藏起来。
+
+处理：
+
+- 仓库设置改成 **Read and write permissions**（一次性）；
+- 发布步骤失败时输出 `::error::` 注解并 `exit 1`，让失败可见；
+- 去掉独立的 `git push tag` —— `POST /releases` 的 `tag_name` 不存在时
+  GitHub/Gitea 会自动从默认分支建 tag，少一个动作就少一个 403 失败点；
+- `publish_release.py` 把「附件上传失败」从只打日志改为返回非零，
+  避免出现「Release 建好了但 Assets 是空的」这种更难查的中间态。
 
 ---
 

@@ -82,8 +82,12 @@ def api_json(method: str, url: str, tok: str, payload: dict | None = None) -> di
         return {}
 
 
-def upload_asset(base: str, repo: str, rel_id: int, tok: str, path: str) -> None:
-    """上传附件；若已存在同名资产则先删除再传（实现覆盖）。"""
+def upload_asset(base: str, repo: str, rel_id: int, tok: str, path: str) -> bool:
+    """上传附件；若已存在同名资产则先删除再传（实现覆盖）。
+
+    返回 True 表示确实传上去了。Release 建好了却没附件是最难排查的状态
+    （页面有版本、但 Assets 里只有 Source code），所以失败必须让上层感知。
+    """
     name = os.path.basename(path)
     with open(path, "rb") as fh:
         content = fh.read()
@@ -116,8 +120,9 @@ def upload_asset(base: str, repo: str, rel_id: int, tok: str, path: str) -> None
     if status >= 400:
         print(f"[publish]   上传 {name} 失败 {status}: {resp[:200].decode('utf-8','replace')}",
               file=sys.stderr)
-        return
-    print(f"[publish]   上传 {name} ✓")
+        return False
+    print(f"[publish]   上传 {name} ✓ ({len(content) / 1048576:.1f} MB)")
+    return True
 
 
 def main() -> int:
@@ -159,13 +164,25 @@ def main() -> int:
     else:
         print(f"[publish] Release 已存在 id={rel_id}，更新附件")
 
+    ok = True
+    uploaded = 0
     for path in args.assets:
         if os.path.isfile(path):
-            upload_asset(base, repo, int(rel_id), tok, path)
+            if upload_asset(base, repo, int(rel_id), tok, path):
+                uploaded += 1
+            else:
+                ok = False
         else:
             print(f"[publish]   跳过（不存在）：{path}")
 
-    print(f"[publish] ✓ 完成：{args.tag}")
+    if uploaded == 0:
+        print("[publish] ✗ 没有任何附件上传成功", file=sys.stderr)
+        return 1
+    if not ok:
+        print("[publish] ✗ 部分附件上传失败", file=sys.stderr)
+        return 1
+
+    print(f"[publish] ✓ 完成：{args.tag}（{uploaded} 个附件）")
     return 0
 
 
