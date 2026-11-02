@@ -106,7 +106,10 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
+      # 发布失败不应把「构建成功」也拖红 —— 产物已在上一步作为 artifact 上传，
+      # 任何人都能下载。release 只是便利，缺权限/网络时让它自己红一条就够了。
       - name: 发布到 Releases
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
@@ -141,7 +144,11 @@ jobs:
           # 打 tag（已存在则复用）
           if ! git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
             git tag -a "${TAG}" -m "Hermes ${VERSION} (upstream ${SHA})"
-            git push origin "refs/tags/${TAG}"
+            # 推 tag 需要 GITHUB_TOKEN 有 contents:write。workflow 已声明，
+            # 但仓库级 Settings → Actions → Workflow permissions 若为只读，
+            # 会覆盖声明 —— 那时这里会 403，属预期，不影响 artifact。
+            git push origin "refs/tags/${TAG}" || \
+              echo "::warning::推 tag 被拒，请把仓库 Actions 权限改成 Read and write"
           fi
 
           # 仓库标识：Gitea 与 GitHub 都提供 GITHUB_REPOSITORY
