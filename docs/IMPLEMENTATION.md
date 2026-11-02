@@ -220,6 +220,76 @@ Hermes 前端用 `window.__HERMES_BASE_PATH__` 拼所有路由与跳转，上游
 卸载时选了「保留数据」或卸载中断，`venv` 留在原地，`uv` 拒绝在已存在目录上创建。
 已改为 `uv venv --clear`，并加兜底：残留目录不完整（缺 `bin/python3`）就先删再建。
 
+### 坑 H：插件装了三处的误区（浏览器只认 bundled）
+
+给应用加 dashboard 面板时，把插件放哪都不出现，日志和浏览器控制台全程干净。
+原因是这个生态里有**三套互不相通的插件机制**：
+
+| 机制 | 位置 | 作用 | 浏览器可用 |
+|---|---|---|---|
+| Agent 插件 | `<home>/src/plugins/<id>/{plugin.yaml,__init__.py}` | 注册 agent 工具 | ✓（后端） |
+| Dashboard 插件 | `<home>/plugins/<id>/dashboard/{manifest.json,plugin_api.py}` | `/api/dashboard/plugins` 列表、后端 API 挂载 | 仅后端 |
+| Desktop 插件 | `<home>/desktop-plugins/<id>/plugin.js` | 前端 UI（tab/pane/chip） | **✗ Electron 专属** |
+
+**关键**：前端加载磁盘插件的那段代码是
+
+```ts
+async function diskRoots() {
+  const root = await window.hermesDesktop?.desktopPluginsRoot?.()
+  return root ? [{ dir: root, entrySegments: ['plugin.js'] }] : []
+}
+```
+
+`window.hermesDesktop` 是 **Electron 的 IPC 桥**，纯浏览器里是 `undefined`，
+于是 `diskRoots()` 返回空数组 —— **磁盘上的插件一个都不会加载**。
+
+而 `/api/desktop-plugins/list` 与 `/read` 全程 200，那只是「能力页的文件浏览」
+在枚举目录，**不是加载器**。这就解释了为什么 plugin.js 明明被读取（200）
+却从不执行、也不报错。
+
+**浏览器版唯一的路是 bundled**：
+
+```
+src/apps/desktop/src/plugins/<id>/plugin.{js,tsx}
+```
+
+由 `import.meta.glob('../plugins/*/plugin.{js,ts,tsx}')` 在**构建时**打进 main bundle。
+所以 `scripts/build.sh` 增加了 `inject_bundled_plugins()`，构建前把随包插件
+复制到源码树对应位置。
+
+### 坑 I：插件 UI 的 API 换代了
+
+旧插件用 `window.__HERMES_PLUGINS__.register(id, Page)` —— 这个全局**在源码前端里
+根本不存在**（`grep` 不到），脚本第一行 `if (!SDK) return` 就静默返回。
+
+当前版本的写法是 contributions：
+
+```js
+export default {
+  id: 'fnos-auth',
+  register(ctx) {
+    ctx.register({ area: 'routes', id: '...:page', title: '...',
+                   data: { path: '/fnos-auth' }, render: () => jsx(Page, {}) })
+  }
+}
+```
+
+`ctx` 提供 `register / registerMany / registerSettingsPage / rest / socket /
+onEvent / onDispose / setTimeout / i18n`。后端调用走 `ctx.rest('/devices')`，
+自动加 `/api/plugins/<id>/` 命名空间。
+
+可用的 `area` 只有：`layouts`、`panes`、`routes`、`statusBar.left|right`、
+`titleBar.center|left|right` —— **没有 nav / sidebar**，插件无法往左侧导航插入口。
+
+组件从 `@hermes/plugin-sdk` 取：`Badge / Button / Input / Tip / Tooltip / Separator /
+Dialog / Popover / Switch / Tabs / Toast / RowButton / SearchField / GlyphSpinner /
+cn / haptic / icons / useValue / useQuery / usePluginI18n`。
+
+注意两处细节：
+* `Button` 的 variant 是 `default / destructive / outline / secondary / chip /
+  ghost / grip / floating / link / text / textStrong`，**没有 `muted`**（那是 Badge 的）
+* UI 必须用 `jsx()` / `jsxs()` 调用，不能用 JSX 语法（加载时不经编译）
+
 ### 坑 G：图标"太小"
 
 不是尺寸问题（官方 `fnos-apps` 只用 `64.png`），而是两点：

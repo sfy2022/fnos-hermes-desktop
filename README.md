@@ -60,6 +60,43 @@ Desktop 工作区依赖一条 WebSocket（前端称之为 *Desktop IPC bridge*�
 
 ---
 
+## fnOS 授权面板
+
+装完自带一个「fnOS 授权」面板，用来给 Agent 开通本机或其它 fnOS 设备的操作权限
+（文件、Docker、应用中心、存储、监控等）。
+
+**入口在右下角状态栏**：
+
+```
+ ● fnOS 1/2        ← 已授权 / 总数（琥珀点=还有未授权），点击进入面板
+```
+
+也可以直接访问 `http://<nas>:9120/#/fnos-auth`。
+
+### 用法
+
+1. 面板顶部填 NAS 地址（`192.168.1.28` 或 `nas.example.com:5666`）→ **添加**
+2. 点该设备的 **发起授权** → 出现一条登录链接
+3. 浏览器打开链接 → 用飞牛账号登录并确认授权
+4. 复制页面给出的授权码 → 粘回面板 → **提交**
+
+> **一次只用一个链接。** 每次点「发起授权 / 重新授权」都会生成新的 client_id，
+> 上一个立即失效。面板加了 2.5 秒冷却来避免误连点。
+
+### 为什么不放在左侧导航
+
+这个前端版本的插件贡献区只有 `layouts / panes / routes / statusBar.* / titleBar.*`，
+**没有 nav / sidebar** —— 插件无法往左侧导航插入口，`routes` 只注册路由不生成导航项。
+所以入口落在状态栏，同时兼作授权进度指示。
+
+### 对应的 agent 工具
+
+面板背后是同一套 API，agent 也能直接调用：
+`fnos_auth_devices`、`fnos_auth_add`、`fnos_auth_start`、`fnos_auth_submit`、
+`fnos_auth_check`、`fnos_auth_logout`。在会话里说「给 E5 授权」即可。
+
+---
+
 ## 功能
 
 与官方 Desktop Webapp 一致（官方文档 `user-guide/desktop.md`）：
