@@ -55,6 +55,19 @@ Desktop 工作区依赖一条 WebSocket（前端称之为 *Desktop IPC bridge*�
 
 ---
 
+## 界面预览
+
+| 飞牛应用中心 | 消息平台 |
+|---|---|
+| ![应用中心](docs/screenshots/app-center.jpg) | ![消息平台](docs/screenshots/messaging.png) |
+
+左：在飞牛应用中心里就是一个普通应用，版本与来源一目了然。
+右：内置消息平台接入 —— Telegram / Discord / Slack / Mattermost / Matrix /
+WhatsApp / Signal / BlueBubbles / Email / SMS / 钉钉 / 飞书 / Google Chat /
+企业微信 / 微信 / QQ Bot / 元宝，填好 Bot 令牌即可让 Agent 在聊天里干活。
+
+---
+
 ## 首次使用
 
 1. 点图标打开（网页入口需登录，见安装时设置的密码）
