@@ -19,7 +19,8 @@
 3. 安装完成后桌面出现两个图标：**Hermes Desktop**（网页入口，推荐）与 **Hermes Desktop (桌面内嵌)**（实验性）
 4. 首次访问 `http://<NAS_IP>:9120`，用 `admin` / `12345678` 登录，**登录后请立刻在设置里改密码**
 
-> 安装/升级包同时托管在 Gitea：[git.ssjz.fun/sunfu/fnos-hermes-desktop](https://git.ssjz.fun/sunfu/fnos-hermes-desktop/releases)
+> **公开下载以 GitHub Releases 为准**（上面的链接）。仓库另有一份私有 Gitea 镜像
+> 用于国内加速构建，未对外开放。
 >
 > 没有看到 Releases / 只有源码压缩包？说明该次构建的发布步骤被仓库权限拦住了，
 > 见 [常见问题 · 为什么没有 fpk 下载](#为什么-releases-里没有-fpk-下载)。

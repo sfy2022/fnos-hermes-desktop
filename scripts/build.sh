@@ -237,7 +237,12 @@ cp -r "${DIST_WEBAPP}/." "${FPK_DIR}/app/webapp/"
 if [ -f "${FPK_DIR}/manifest" ]; then
   # 应用版本默认跟随上游，但允许用 APP_VERSION 覆盖 —— 同版本号 fnOS 不允许
   # 覆盖安装，改了内容（如内置插件）后需要提版本，否则用户装不上。
+  #
+  # 注意：APP_VERSION 必须同时回写给 HERMES_VERSION。否则会出现
+  # manifest 写 0.22.8、但产物文件名和 build-info.json 还是 0.22.5 的错位，
+  # 下游（CI 的 release tag、下载文件名）全靠 build-info，一错全错。
   APP_VERSION="${APP_VERSION:-${HERMES_VERSION}}"
+  HERMES_VERSION="${APP_VERSION}"
   sed -i.bak "s|^version[[:space:]]*=.*|version               = ${APP_VERSION}|" "${FPK_DIR}/manifest"
   sed -i.bak "s|^desc[[:space:]]*=.*|desc                  = Hermes 官方 Desktop 工作区的飞牛原生版。保留完整 Desktop 体验：对话流式输出、工具调用可视化、并排预览、文件浏览、Artifacts、定时任务、多 Profile、技能管理、终端栏、Git 审阅。基于官方 Webapp 形态（gateway 内建渲染层），无需 Electron，浏览器内即原生体验。上游 commit ${UPSTREAM_SHA}。|" "${FPK_DIR}/manifest"
   rm -f "${FPK_DIR}/manifest.bak"

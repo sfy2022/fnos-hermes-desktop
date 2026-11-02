@@ -70,10 +70,50 @@ jobs:
           echo "npm:  $(npm -v)"
           echo "date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
+      # fnOS 不允许覆盖安装同版本号，版本号必须每次都不一样，否则用户
+      # 下载了新包却装不上（提示版本已存在/低于已安装版本）。
+      #
+      # 取「上游版本」与「本仓库已有 tag」中较大的那个作为基准，再往上
+      # 找第一个空位。只看上游不够 —— 上游还是 0.22.5 时，本地手工构建过
+      # 0.22.8，CI 若还用 0.22.5 就会把用户装回去（降级装不上）。
+      #
+      # 用 git ls-remote 而不是 release API —— GitHub 与 Gitea 的 ref 路径
+      # 写法不同，ls-remote 两边通用，也不需要额外 token。
+      - name: 计算应用版本
+        run: |
+          set -uo pipefail
+          UP="$(curl -fsSL --max-time 30 \
+                https://api.github.com/repos/NousResearch/hermes-agent/releases/latest \
+                | python3 -c 'import json,sys;print(json.load(sys.stdin).get("tag_name","").lstrip("v"))' \
+                2>/dev/null || true)"
+          EXISTING="$(git ls-remote --tags origin 2>/dev/null | sed 's#.*refs/tags/##; s/\^{}//')" || EXISTING=""
+          MAXTAG="$(echo "${EXISTING}" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+                    | sed 's/^v//' | sort -V | tail -1)"
+          BASE="$(printf '%s\n%s\n' "${UP}" "${MAXTAG}" \
+                  | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)"
+          if [ -z "${BASE}" ]; then
+            echo "既取不到上游版本、也没有可比较的 tag，交给 build.sh 决定"
+            exit 0
+          fi
+          MAJOR="$(echo "${BASE}" | cut -d. -f1)"
+          MINOR="$(echo "${BASE}" | cut -d. -f2)"
+          PATCH="$(echo "${BASE}" | cut -d. -f3 | tr -cd '0-9')"
+          [ -n "${PATCH}" ] || PATCH=0
+          CAND="${MAJOR}.${MINOR}.${PATCH}"
+          n=0
+          while echo "${EXISTING}" | grep -qx "v${CAND}" && [ "${n}" -lt 500 ]; do
+            PATCH=$((PATCH + 1))
+            CAND="${MAJOR}.${MINOR}.${PATCH}"
+            n=$((n + 1))
+          done
+          echo "APP_VERSION=${CAND}" >> "${GITHUB_ENV}"
+          echo "- 🏷 应用版本：**${CAND}**（上游 ${UP:-未知}，已有最高 ${MAXTAG:-无}）" >> "${GITHUB_STEP_SUMMARY}"
+
       - name: 构建 fpk
         env:
           UPSTREAM_REF: ${{ github.event.inputs.upstream_ref || 'main' }}
           SKIP_BUNDLE: ${{ github.event.inputs.skip_bundle && '1' || '0' }}
+          APP_VERSION: ${{ env.APP_VERSION }}
         run: bash scripts/build.sh
 
       - name: 校验产物
