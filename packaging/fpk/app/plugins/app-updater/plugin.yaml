@@ -1,0 +1,7 @@
+name: app-updater
+version: 1.0.0
+description: "检查 GitHub Releases 上的新版本，一键下载 fpk 并交给 fnOS 应用中心升级。界面在「应用更新」页与右下角状态栏，也可由 agent 通过 REST 调用。"
+author: "Hermes Agent"
+kind: standalone
+platforms:
+  - linux

@@ -1,0 +1,11 @@
+{
+  "name": "app-updater",
+  "label": "应用更新",
+  "description": "检查 GitHub Releases 上的新版本，一键下载并交给 fnOS 应用中心升级",
+  "icon": "RefreshCw",
+  "version": "1.0.0",
+  "tab": {
+    "hidden": true
+  },
+  "api": "plugin_api.py"
+}
