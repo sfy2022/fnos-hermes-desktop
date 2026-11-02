@@ -62,7 +62,10 @@ same gateway in **remote mode**.
 
 ## Install
 
-飞牛桌面 → **应用中心** → **手动安装** → choose `hermes-desktop.fpk`
+**[⬇️ Download the latest release](https://github.com/sfy2022/fnos-hermes-desktop/releases/latest)** —
+grab `Hermes-Desktop-fnOS-v<version>-<commit>.fpk` from **Assets** (~22 MB, x86_64).
+
+飞牛桌面 → **应用中心** → **手动安装** → choose that `.fpk`
 
 The wizard asks for:
 
