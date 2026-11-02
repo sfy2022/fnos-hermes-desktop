@@ -28,6 +28,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+from urllib.parse import quote
 
 
 def die(msg: str) -> None:
@@ -45,6 +46,22 @@ def api_base() -> str:
     return "https://api.github.com"
 
 
+def upload_base() -> str:
+    """GitHub 的 Release 附件上传必须走 uploads.github.com。
+
+    官方 REST 文档里 "Upload a release asset" 的 host 单独写成了
+    uploads.github.com，用 api.github.com 传附件会被拒 —— 而创建 Release
+    本身走 api.github.com 是正常的。这个不对称极容易踩：
+    结果是「Release 建出来了，但 Assets 里什么都没有」。
+
+    Gitea 没有独立的上传域，沿用 api base。
+    """
+    base = api_base()
+    if base == "https://api.github.com":
+        return "https://uploads.github.com"
+    return base
+
+
 def token() -> str:
     # Gitea 优先用 GITEA_TOKEN，GitHub 用 GH_TOKEN/GITHUB_TOKEN
     for name in ("GITEA_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
@@ -55,14 +72,19 @@ def token() -> str:
 
 
 def request(method: str, url: str, tok: str, data: bytes | None = None,
-            content_type: str | None = None) -> tuple[int, bytes]:
+            content_type: str | None = None,
+            timeout: int = 120) -> tuple[int, bytes]:
     req = urllib.request.Request(url, data=data, method=method)
     if tok:
         req.add_header("Authorization", f"token {tok}")
     if content_type:
         req.add_header("Content-Type", content_type)
+    # urllib 默认按 chunked 发；GitHub 的上传端点对 chunked 支持不稳，
+    # 显式给出长度更保险。
+    if data is not None:
+        req.add_header("Content-Length", str(len(data)))
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.status, resp.read()
     except urllib.error.HTTPError as exc:
         return exc.code, exc.read()
@@ -87,41 +109,57 @@ def upload_asset(base: str, repo: str, rel_id: int, tok: str, path: str) -> bool
 
     返回 True 表示确实传上去了。Release 建好了却没附件是最难排查的状态
     （页面有版本、但 Assets 里只有 Source code），所以失败必须让上层感知。
+
+    用 raw body + application/octet-stream，不用手拼 multipart：
+    GitHub 的上传端点对 multipart 的边界/头要求严格，手拼容易 400，
+    而 raw 上传是官方 curl 示例的写法。
     """
     name = os.path.basename(path)
     with open(path, "rb") as fh:
         content = fh.read()
+    size_mb = len(content) / 1048576
 
     # 查同名资产
+    ext = os.path.splitext(name)[1].lower()
     status, body = request("GET", f"{base}/repos/{repo}/releases/{rel_id}/assets", tok)
     if status < 400:
         try:
             for asset in json.loads(body.decode("utf-8")):
-                if asset.get("name") == name and asset.get("id"):
+                aname = asset.get("name") or ""
+                if not asset.get("id"):
+                    continue
+                # fpk 只保留最新一份：文件名里带 upstream commit，
+                # 每次构建都不同，不清就会在同一个 Release 里越堆越多。
+                stale = aname == name or (ext == ".fpk" and aname.lower().endswith(".fpk"))
+                if stale:
                     request("DELETE",
                             f"{base}/repos/{repo}/releases/assets/{asset['id']}", tok)
-                    print(f"[publish]   删除旧资产 {name}")
-                    break
+                    print(f"[publish]   删除旧资产 {aname}")
         except Exception:
             pass
 
-    # multipart/form-data 上传
-    boundary = "----fnoshermesdesktopboundary"
-    body = b"".join([
-        f"--{boundary}\r\n".encode(),
-        f'Content-Disposition: form-data; name="attachment"; filename="{name}"\r\n'.encode(),
-        b"Content-Type: application/octet-stream\r\n\r\n",
-        content,
-        f"\r\n--{boundary}--\r\n".encode(),
-    ])
-    url = f"{base}/repos/{repo}/releases/{rel_id}/assets?name={name}"
-    status, resp = request("POST", url, tok, body,
-                           f"multipart/form-data; boundary={boundary}")
+    # 附件必须走 uploads.github.com（见 upload_base 说明）
+    ub = upload_base()
+    url = f"{ub}/repos/{repo}/releases/{rel_id}/assets?name={quote(name)}"
+    print(f"[publish]   上传 {name} ({size_mb:.1f} MB) → {ub}")
+    status, resp = request("POST", url, tok, content,
+                           "application/octet-stream", timeout=600)
     if status >= 400:
-        print(f"[publish]   上传 {name} 失败 {status}: {resp[:200].decode('utf-8','replace')}",
+        print(f"[publish]   上传 {name} 失败 {status}: {resp[:500].decode('utf-8','replace')}",
               file=sys.stderr)
         return False
-    print(f"[publish]   上传 {name} ✓ ({len(content) / 1048576:.1f} MB)")
+
+    # 回读校验：GitHub 返回的 asset 里应带 size
+    try:
+        info = json.loads(resp.decode("utf-8"))
+        got = info.get("size")
+        if isinstance(got, int) and got != len(content):
+            print(f"[publish]   {name} 上传后大小不一致：local={len(content)} remote={got}",
+                  file=sys.stderr)
+            return False
+        print(f"[publish]   上传 {name} ✓ ({got or len(content)} 字节)")
+    except Exception:
+        print(f"[publish]   上传 {name} ✓")
     return True
 
 
