@@ -41,6 +41,10 @@ jobs:
     steps:
       - name: 检出本仓库
         uses: actions/checkout@v4
+        with:
+          # 需要完整历史与 tag：Release 说明要算「自上一版起有哪些提交」，
+          # 浅克隆里 git log prev_tag..HEAD 直接失败。
+          fetch-depth: 0
 
       # 直接下载 Node 26 二进制，不依赖 setup-node——
       # Gitea 的 action 源与 GitHub 不完全一致，且 Node 26 较新，
@@ -173,28 +177,35 @@ jobs:
           FPK_FILE=$(ls dist/Hermes-Desktop-fnOS-v*.fpk 2>/dev/null | head -1)
           [ -n "${FPK_FILE}" ] || { echo "::error::找不到规范化后的产物"; exit 1; }
           SHA256=$(sha256sum "${FPK_FILE}" | cut -d' ' -f1)
-          SIZE=$(du -h "${FPK_FILE}" | cut -f1)
-          {
-            echo "Hermes 官方 Desktop 工作区的飞牛原生版。"
-            echo
-            echo "**下载**：本页 Assets 中的 \`$(basename "${FPK_FILE}")\`（${SIZE}）"
-            echo
-            echo "**安装**：飞牛桌面 → 应用中心 → 手动安装 → 选择该 fpk"
-            echo
-            echo "---"
-            echo
-            echo "上游仓库：NousResearch/hermes-agent  "
-            echo "上游 commit：\`${SHA}\`"
-            echo
-            echo "| 项目 | 值 |"
-            echo "| --- | --- |"
-            echo "| 版本 | ${VERSION} |"
-            echo "| SHA256 | \`${SHA256}\` |"
-            echo "| 架构 | x86_64 |"
-          } > release-notes.md
+          SIZE=$(du -h "${FPK_FILE}" | cut -f1 | tr -d ' ')
 
           # 仓库标识：Gitea 与 GitHub 都提供 GITHUB_REPOSITORY
           REPO_FULL="${GITHUB_REPOSITORY:-}"
+
+          # 说明里要写清「更新了什么」—— 用户看到版本号变了却不知道改了啥，
+          # 只能盲猜要不要升。生成逻辑在 scripts/release_notes.py：
+          # 应用侧用 git log，上游用 compare API（基准取上一版 build-info 的 upstream_sha）。
+          if ! python3 scripts/release_notes.py \
+                --repo "${REPO_FULL}" \
+                --api "${GITHUB_API_URL:-https://api.github.com}" \
+                --token "${GH_TOKEN:-${GITEA_TOKEN}}" \
+                --version "${VERSION}" \
+                --sha "${SHA}" \
+                --asset "$(basename "${FPK_FILE}")" \
+                --size "${SIZE}" \
+                --sha256 "${SHA256}" \
+                --out release-notes.md; then
+            echo "::warning::变更说明生成失败，退回简版说明"
+            {
+              echo "Hermes 官方 Desktop 工作区的飞牛原生版。"
+              echo
+              echo "**下载**：\`$(basename "${FPK_FILE}")\`（${SIZE}）"
+              echo
+              echo "**安装**：飞牛桌面 → 应用中心 → 手动安装 → 选择该 fpk"
+              echo
+              echo "上游 commit：\`${SHA}\` ｜ SHA256：\`${SHA256}\`"
+            } > release-notes.md
+          fi
 
           # 发布逻辑放在独立脚本里，避免 YAML 嵌套引号踩坑
           if ! python3 scripts/publish_release.py \
