@@ -290,7 +290,7 @@ cn / haptic / icons / useValue / useQuery / usePluginI18n`。
   ghost / grip / floating / link / text / textStrong`，**没有 `muted`**（那是 Badge 的）
 * UI 必须用 `jsx()` / `jsxs()` 调用，不能用 JSX 语法（加载时不经编译）
 
-### 坑 G：图标"太小"
+### 坑 J：图标"太小"
 
 不是尺寸问题（官方 `fnos-apps` 只用 `64.png`），而是两点：
 
