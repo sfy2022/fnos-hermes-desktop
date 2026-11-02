@@ -558,12 +558,13 @@ verify_webapp() {
 #
 # 插件放在 HERMES_HOME/plugins/（上游扫描 home/plugins 与 profiles/*/plugins），
 # 不放源码树 —— 源码树在升级时会被覆盖。
-deploy_fnos_auth_plugin() {
-    local src="${TRIM_APPDEST}/plugins/fnos-auth"
-    local dst="${DATA_DIR}/plugins/fnos-auth"
+deploy_bundled_plugin() {
+    local name="$1"
+    local src="${TRIM_APPDEST}/plugins/${name}"
+    local dst="${DATA_DIR}/plugins/${name}"
 
     if [ ! -d "${src}" ]; then
-        log_msg "未随包内置 fnOS 授权插件，跳过"
+        log_msg "未随包内置插件 ${name}，跳过"
         return 0
     fi
 
@@ -578,29 +579,40 @@ deploy_fnos_auth_plugin() {
     #   plugins/<n>/desktop/ —— 统一包的 desktop half（RUNTIME door 之一）
     #   desktop-plugins/<n>/ —— RUNTIME door 之二，**webapp 前端实际扫描这个**，
     #                           dashboard tab 就靠它出现
-    local dst_src="${DATA_DIR}/src/plugins/fnos-auth"
+    local dst_src="${DATA_DIR}/src/plugins/${name}"
     mkdir -p "${DATA_DIR}/plugins" "${DATA_DIR}/src/plugins" \
              "${DATA_DIR}/desktop-plugins" 2>/dev/null || true
 
     # 前端要的独立副本：plugin.js 直接放 desktop-plugins/<id>/
     if [ -f "${src}/desktop/plugin.js" ]; then
-        local dst_dp="${DATA_DIR}/desktop-plugins/fnos-auth"
+        local dst_dp="${DATA_DIR}/desktop-plugins/${name}"
         mkdir -p "${dst_dp}" 2>/dev/null || true
         if cp -f "${src}/desktop/plugin.js" "${dst_dp}/plugin.js" 2>/dev/null; then
             chmod a+rX "${dst_dp}" "${dst_dp}/plugin.js" 2>/dev/null || true
-            log_msg "fnOS 授权面板已部署到 ${dst_dp}"
+            log_msg "插件 ${name} 的 desktop half 已部署到 ${dst_dp}"
         fi
     fi
 
-    for dst in "${dst_src}" "${DATA_DIR}/plugins/fnos-auth"; do
-        rm -rf "${dst}"
-        if cp -r "${src}" "${dst}" 2>/dev/null; then
+    local target
+    for target in "${dst_src}" "${dst}"; do
+        rm -rf "${target}"
+        if cp -r "${src}" "${target}" 2>/dev/null; then
             # 只读加载即可：Hermes 设了 PYTHONDONTWRITEBYTECODE=1，不写 __pycache__
-            chmod -R a+rX "${dst}" 2>/dev/null || true
-            log_msg "fnOS 授权插件已部署到 ${dst}"
+            chmod -R a+rX "${target}" 2>/dev/null || true
+            log_msg "插件 ${name} 已部署到 ${target}"
         else
-            log_msg "复制 fnOS 授权插件到 ${dst} 失败，跳过"
+            log_msg "复制插件 ${name} 到 ${target} 失败，跳过"
         fi
+    done
+    return 0
+}
+
+# 遍历部署全部随包插件（新增插件只需放进 packaging/fpk/app/plugins/）
+deploy_bundled_plugins() {
+    local d
+    for d in "${TRIM_APPDEST}"/plugins/*/; do
+        [ -d "${d}" ] || continue
+        deploy_bundled_plugin "$(basename "${d}")"
     done
     return 0
 }
@@ -689,9 +701,6 @@ verify_fnos_skill() {
         fi
         log_msg "飞牛 Skill 校验未通过（第 ${i} 次），重新部署"
         deploy_fnos_skill
-
-# fnOS 授权插件：提供界面里的授权面板与 fnos_auth_* 工具
-deploy_fnos_auth_plugin
         sleep 2
     done
     log_msg "警告：飞牛 Skill 未能稳定部署，功能可能不可用"
@@ -713,6 +722,7 @@ ensure_uv || exit 1
 fetch_source || exit 1
 install_hermes || exit 1
 deploy_fnos_skill
+deploy_bundled_plugins
 verify_fnos_skill || log_msg "飞牛 Skill 部署校验未通过，但不影响主功能"
 
 # 修复属主：应用以专用用户运行，确保数据目录可写

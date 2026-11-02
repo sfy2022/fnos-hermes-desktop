@@ -56,9 +56,10 @@ deploy_bundled_plugins() {
     local src="${TRIM_APPDEST}/plugins"
     [ -d "${src}" ] || { log_msg "未随包内置插件，跳过"; return 0; }
 
-    local name dst
-    for name in fnos-auth; do
-        [ -d "${src}/${name}" ] || continue
+    local name dst d
+    for d in "${src}"/*/; do
+        [ -d "${d}" ] || continue
+        name="$(basename "${d}")"
         for dst in "${TRIM_PKGVAR}/src/plugins/${name}" "${TRIM_PKGVAR}/plugins/${name}"; do
             mkdir -p "$(dirname "${dst}")" 2>/dev/null || true
             rm -rf "${dst}"
@@ -67,6 +68,12 @@ deploy_bundled_plugins() {
                 log_msg "插件 ${name} 已重新部署到 ${dst}"
             fi
         done
+        # desktop-plugins 要平铺的 plugin.js（runtime door 的形态），不能整目录拷
+        if [ -f "${src}/${name}/desktop/plugin.js" ]; then
+            mkdir -p "${TRIM_PKGVAR}/desktop-plugins/${name}" 2>/dev/null || true
+            cp -f "${src}/${name}/desktop/plugin.js" \
+                  "${TRIM_PKGVAR}/desktop-plugins/${name}/plugin.js" 2>/dev/null || true
+        fi
     done
     return 0
 }
