@@ -5,6 +5,9 @@
 
 [English](README.en.md) · [实施报告](docs/IMPLEMENTATION.md)
 
+> 打包分发：[巴盟女婿](https://github.com/sfy2022/fnos-hermes-desktop)
+> 上游：[NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)
+
 ---
 
 ## 这是什么

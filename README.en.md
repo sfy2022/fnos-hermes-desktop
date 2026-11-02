@@ -6,6 +6,9 @@ Electron, no virtual display, no VNC streaming.
 
 [中文](README.md) · [Implementation report](docs/IMPLEMENTATION.md)
 
+> Packaged by [巴盟女婿](https://github.com/sfy2022/fnos-hermes-desktop)
+> Upstream: [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)
+
 ---
 
 ## What this is
