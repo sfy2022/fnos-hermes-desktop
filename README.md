@@ -27,11 +27,12 @@
 > **应用数据位置**（飞牛官方目录规范）：
 > - 应用文件（文件管理 → 应用文件，用户可见）：`/vol1/@appshare/hermes-desktop`
 > - 数据（会话、venv、日志）：`/vol1/@appdata/hermes-desktop`
-> - 配置（`config.yaml`、`access-info.txt`）：`/vol1/@appconf/hermes-desktop`
+> - 配置实体（`config.yaml`、`access-info.txt`、`gateway.conf`）：
+>   `/vol1/@appshare/hermes-desktop/config`（`/vol1/@appconf` 中为符号链接）
 > - HOME：`/vol1/@apphome/hermes-desktop`
 >
-> 「应用文件」里的 `data`/`config`/`logs`/`workspace` 是指向真实目录的入口；
-> 真实数据仍在 fnOS 标准目录，避免把密钥/运行环境直接暴露到共享目录。
+> 「应用文件」里的 `config`/`logs`/`workspace` 是实体目录，可直接查看/编辑；
+> `data` 指向 `@appdata`（venv/src/sessions 等运行时数据仍在内部目录）。
 
 > 下载慢或失败多半是国内访问 GitHub 大文件 CDN 的问题，挂代理更稳。
 

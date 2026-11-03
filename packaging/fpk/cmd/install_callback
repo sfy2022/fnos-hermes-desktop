@@ -58,39 +58,69 @@ gen_password() {
 
 # ── etc / var 布局准备（REFACTOR-CONTRACT §3.2） ─────────────────────────
 # fnOS 的“应用文件”只展示 @appshare/<app>（由 config/resource 的 data-share 声明）。
-# 在这里建一个用户可见入口：README + 指向内部数据/配置的符号链接。
+# 配置/日志/工作区实体都放到这里，etc/var 只留符号链接：
+#   - 用户可在文件管理器直接查看/编辑 config.yaml、access-info.txt
+#   - 运行数据（venv/src/sessions）仍留在 @appdata，避免把运行环境也暴露出去
 ensure_appshare() {
     local share="${APPSHARE_DIR}"
-    local uid gid
-    if ! mkdir -p "${share}" 2>/dev/null; then
+    local uid gid f src dst name
+    if ! mkdir -p "${share}/config" "${share}/logs" "${share}/workspace" 2>/dev/null; then
         log_msg "提示：无法创建 ${share}（父目录通常仅 root 可写），应用文件入口可能不显示"
         return 0
     fi
-    chmod 770 "${share}" 2>/dev/null || true
+    chmod 770 "${share}" "${share}/config" "${share}/logs" "${share}/workspace" 2>/dev/null || true
     uid="$(stat -c '%u' "${DATA_DIR}" 2>/dev/null || true)"
     gid="$(stat -c '%g' "${DATA_DIR}" 2>/dev/null || true)"
     if [ "$(id -u)" = "0" ] && [ -n "${uid}" ] && [ -n "${gid}" ]; then
-        chown "${uid}:${gid}" "${share}" 2>/dev/null || true
+        chown "${uid}:${gid}" "${share}" "${share}/config" "${share}/logs" "${share}/workspace" 2>/dev/null || true
     fi
 
+    # 配置实体迁移到 @appshare/config；etc 保留同名符号链接。
+    for f in config.yaml access-info.txt gateway.conf; do
+        src="${ETC_DIR}/${f}"
+        dst="${share}/config/${f}"
+        if [ -e "${src}" ] && [ ! -L "${src}" ]; then
+            if [ ! -e "${dst}" ]; then
+                mv -f "${src}" "${dst}" 2>/dev/null || true
+            else
+                rm -f "${src}" 2>/dev/null || true
+            fi
+        fi
+        ln -sfn "${dst}" "${src}" 2>/dev/null || true
+    done
+
+    # 日志/工作区实体迁移；var 里留符号链接。
+    for name in logs workspace; do
+        src="${DATA_DIR}/${name}"
+        dst="${share}/${name}"
+        if [ -d "${src}" ] && [ ! -L "${src}" ]; then
+            if [ ! -e "${dst}" ]; then
+                mv "${src}" "${dst}" 2>/dev/null || true
+            else
+                rm -rf "${src}" 2>/dev/null || true
+            fi
+        fi
+        ln -sfn "${dst}" "${src}" 2>/dev/null || true
+    done
+
     ln -sfn "${DATA_DIR}" "${share}/data" 2>/dev/null || true
-    ln -sfn "${ETC_DIR}" "${share}/config" 2>/dev/null || true
-    ln -sfn "${DATA_DIR}/logs" "${share}/logs" 2>/dev/null || true
-    ln -sfn "${DATA_DIR}/workspace" "${share}/workspace" 2>/dev/null || true
     cat > "${share}/README.txt" <<EOF
 Hermes Desktop 应用文件
 =======================
-这里只是用户可见入口，真实数据仍在飞牛标准目录：
+可直接查看/编辑：
 
-- data/     -> ${DATA_DIR}
-- config/   -> ${ETC_DIR}（config.yaml、access-info.txt）
-- logs/     -> ${DATA_DIR}/logs
-- workspace/-> ${DATA_DIR}/workspace
+- config/config.yaml       Hermes 主配置（模型、webapp、认证）
+- config/access-info.txt   访问地址与登录账号
+- config/gateway.conf      网关适配层配置
+- logs/                    运行日志
+- workspace/               Agent 工作区
 
-请勿直接删除 venv/src 等目录；卸载请在应用中心操作。
+data/ 指向 ${DATA_DIR}（venv/src/sessions 等运行时数据仍在这里）。
+修改配置后请在应用中心重启 Hermes 生效；卸载请在应用中心操作。
 EOF
     chmod 644 "${share}/README.txt" 2>/dev/null || true
-    log_msg "应用文件入口已就绪：${share}"
+    chmod 660 "${share}/config"/* 2>/dev/null || true
+    log_msg "应用文件入口已就绪：${share}（config/logs/workspace 已迁移）"
 }
 
 # 配置实体只放 etc（TRIM_PKGETC，0600）；var 只放运行数据，
@@ -887,6 +917,7 @@ verify_webapp || exit 1
 # 端口固定使用 manifest.service_port（不换端口：桌面入口与适配层都按它配置）
 apply_wizard_settings || exit 1
 apply_model_config || true
+ensure_appshare
 ensure_uv || exit 1
 fetch_source || exit 1
 install_hermes || exit 1

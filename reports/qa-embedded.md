@@ -170,6 +170,19 @@
 - 产物：`dist/Hermes-Desktop-fnOS-v0.22.19-0f700158.fpk`，
   22,663,549 字节，SHA256 `e9825fe5ad85af3f7e98384364769656f308ae7a465d7b6f506df96b39ced764`。
 
+### 4.7 0.22.20 配置迁移到应用文件
+
+按用户要求，把**配置/日志/工作区实体**迁移到 `/vol1/@appshare/hermes-desktop`：
+
+- `config/config.yaml`、`config/access-info.txt`、`config/gateway.conf` 为实体文件（660）；
+- `logs/`、`workspace/` 为实体目录；
+- `/vol1/@appconf/hermes-desktop/*` 与 `/vol1/@appdata/hermes-desktop/{logs,workspace}` 改为符号链接；
+- `data` 仍指向 `@appdata`（venv/src/sessions 等运行数据）；
+- 卸载删除数据时同时清理 `@appshare/hermes-desktop`，归档也包含 appshare 配置。
+
+产物：`dist/Hermes-Desktop-fnOS-v0.22.20-0f700158.fpk`，
+22,665,161 字节，SHA256 `a14a46fbead23bacdc5afc6fa8e0abaf75625f7108fc367a94690f7d1082453b`。
+
 ## 5. 真机安装与内嵌验收（e5）
 
 在 e5 上安装本仓库重构包（`0.22.6`，含新 adapter/main/布局），`appcenter-cli` 安装成功、应用 running：
@@ -222,7 +235,7 @@
 - 分支：`refactor/embedded-gateway`（已推送，HEAD 见 GitHub）
 - CI：`.github/workflows/test.yml` 在分支上连续通过
   （例：run `41666246054`、`41666044281`、`41664090763`、`41662809087`、`41658183003`、`41657585799`）
-- 官方构建：`dist/Hermes-Desktop-fnOS-v0.22.16-fd267bb3.fpk`（0.22.16）与 `dist/Hermes-Desktop-fnOS-v0.22.17-fd267bb3.fpk`（0.22.17 真机修复）与 `dist/Hermes-Desktop-fnOS-v0.22.18-0f700158.fpk`（0.22.18 安装修复）、`dist/Hermes-Desktop-fnOS-v0.22.19-0f700158.fpk`（0.22.19 应用文件/data-share）
+- 官方构建：`dist/Hermes-Desktop-fnOS-v0.22.16-fd267bb3.fpk`（0.22.16）与 `dist/Hermes-Desktop-fnOS-v0.22.17-fd267bb3.fpk`（0.22.17 真机修复）与 `dist/Hermes-Desktop-fnOS-v0.22.18-0f700158.fpk`（0.22.18 安装修复）、`dist/Hermes-Desktop-fnOS-v0.22.19-0f700158.fpk`（0.22.19）、`dist/Hermes-Desktop-fnOS-v0.22.20-0f700158.fpk`（0.22.20 配置迁移）
 - 早期测试：`/tmp/hermes-build/hermes-desktop.fpk`（0.22.6，已安装到 e5）
 - 日志：`/tmp/official-build-0.22.16.log`、`/tmp/hermes-tests.log`、`/tmp/hermes-desktop-uninstall.log`、
   `/vol1/@appdata/hermes-desktop/{info.log,logs/gateway.log,gateway-adapter.log}`

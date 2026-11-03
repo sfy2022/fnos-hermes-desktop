@@ -178,28 +178,51 @@ status() {
 }
 
 # fnOS“应用文件”展示 @appshare/<app>（config/resource 的 data-share）。
-# 安装时通常已建好；这里每次启动补链接，保证用户能看到入口。
+# 配置/日志/工作区实体迁移到这里，etc/var 只留符号链接；运行时数据仍在 @appdata。
 ensure_appshare() {
     local share="${APPSHARE_DIR}"
-    mkdir -p "${share}" 2>/dev/null || return 0
-    chmod 770 "${share}" 2>/dev/null || true
+    local f src dst name
+    mkdir -p "${share}/config" "${share}/logs" "${share}/workspace" 2>/dev/null || return 0
+    chmod 770 "${share}" "${share}/config" "${share}/logs" "${share}/workspace" 2>/dev/null || true
+
+    for f in config.yaml access-info.txt gateway.conf; do
+        src="${ETC_DIR}/${f}"
+        dst="${share}/config/${f}"
+        if [ -e "${src}" ] && [ ! -L "${src}" ]; then
+            if [ ! -e "${dst}" ]; then
+                mv -f "${src}" "${dst}" 2>/dev/null || true
+            else
+                rm -f "${src}" 2>/dev/null || true
+            fi
+        fi
+        ln -sfn "${dst}" "${src}" 2>/dev/null || true
+    done
+    for name in logs workspace; do
+        src="${DATA_DIR}/${name}"
+        dst="${share}/${name}"
+        if [ -d "${src}" ] && [ ! -L "${src}" ]; then
+            if [ ! -e "${dst}" ]; then
+                mv "${src}" "${dst}" 2>/dev/null || true
+            else
+                rm -rf "${src}" 2>/dev/null || true
+            fi
+        fi
+        ln -sfn "${dst}" "${src}" 2>/dev/null || true
+    done
     ln -sfn "${DATA_DIR}" "${share}/data" 2>/dev/null || true
-    ln -sfn "${ETC_DIR}" "${share}/config" 2>/dev/null || true
-    ln -sfn "${DATA_DIR}/logs" "${share}/logs" 2>/dev/null || true
-    ln -sfn "${DATA_DIR}/workspace" "${share}/workspace" 2>/dev/null || true
-    if [ ! -f "${share}/README.txt" ]; then
-        cat > "${share}/README.txt" <<EOF
+    cat > "${share}/README.txt" <<EOF
 Hermes Desktop 应用文件
 =======================
-- data/     -> ${DATA_DIR}
-- config/   -> ${ETC_DIR}
-- logs/     -> ${DATA_DIR}/logs
-- workspace/-> ${DATA_DIR}/workspace
+- config/config.yaml       主配置（模型、webapp、认证）
+- config/access-info.txt  访问账号
+- logs/                    运行日志
+- workspace/               Agent 工作区
+data/ 指向 ${DATA_DIR}（venv/src/sessions 等运行时数据）。
 
-这里只是用户可见入口，真实数据在飞牛标准目录；请在应用中心卸载。
+修改配置后请在应用中心重启 Hermes。
 EOF
-        chmod 644 "${share}/README.txt" 2>/dev/null || true
-    fi
+    chmod 644 "${share}/README.txt" 2>/dev/null || true
+    chmod 660 "${share}/config"/* 2>/dev/null || true
 }
 
 # etc / var 布局自愈：配置只放 etc，var 里用符号链接指回去（contract §3.2）。
@@ -207,7 +230,6 @@ ensure_home_layout() {
     mkdir -p "${DATA_DIR}" "${ETC_DIR}" 2>/dev/null || true
     # 与 fnOS 其它应用一致；700 会让应用中心的“应用数据”入口看不到目录内容。
     chmod 770 "${DATA_DIR}" 2>/dev/null || true
-    ensure_appshare
 
     # 旧布局迁移：var/config.yaml → etc/config.yaml，var 留符号链接。
     if [ -f "${DATA_DIR}/config.yaml" ] && [ ! -L "${DATA_DIR}/config.yaml" ]; then
@@ -221,6 +243,7 @@ ensure_home_layout() {
     if [ ! -e "${DATA_DIR}/config.yaml" ]; then
         ln -sfn "${CONFIG_FILE}" "${DATA_DIR}/config.yaml" 2>/dev/null || true
     fi
+    ensure_appshare
 }
 
 # 确保 webapp 配置存在（install_callback 已按向导写入 etc；此处只做兜底）。

@@ -29,6 +29,7 @@ LOG_FILE="${LOG_DIR}/info.log"
 UNINSTALL_LOG="/tmp/hermes-desktop-uninstall.log"
 PID_FILE="${LOG_DIR}/app.pid"
 ETC_DIR="${TRIM_PKGETC:-$(dirname "${LOG_DIR}")/etc}"
+SHARE_DIR="${TRIM_APPSHARE:-/vol1/@appshare/$(basename "${TRIM_PKGVAR}")}"
 ADAPTER_PID_FILE="${LOG_DIR}/gateway-adapter.pid"
 ADAPTER="${TRIM_APPDEST}/runtime/gateway/gateway_adapter.py"
 GATEWAY_SOCKET="${TRIM_APPDEST}/app.sock"
@@ -144,13 +145,17 @@ archive_data() {
     # 不归档源码与 Python 环境（可重新下载），否则备份会有 1GB 以上。
     mkdir -p "${dest}" 2>/dev/null || return 0
 
-    # 配置（etc）
+    # 配置（etc；0.22.20+ 实体在 @appshare/config）
     if [ -d "${ETC_DIR}" ]; then
         mkdir -p "${dest}/etc" 2>/dev/null || true
         local etc_item
         for etc_item in config.yaml access-info.txt gateway.conf; do
             [ -e "${ETC_DIR}/${etc_item}" ] && cp -r "${ETC_DIR}/${etc_item}" "${dest}/etc/" 2>/dev/null || true
         done
+    fi
+    if [ -d "${SHARE_DIR}/config" ]; then
+        mkdir -p "${dest}/config" 2>/dev/null || true
+        cp -r "${SHARE_DIR}/config/." "${dest}/config/" 2>/dev/null || true
     fi
 
     # 运行数据（var）
@@ -196,6 +201,12 @@ delete_data() {
 
     # home 下的应用配置（trim-cli OAuth 凭据）
     rm -rf "${TRIM_PKGHOME}/.config/trim-cli" 2>/dev/null || true
+
+    # 0.22.20+ 配置实体/日志/工作区在 @appshare；删除数据时一并清掉。
+    if [ -d "${SHARE_DIR}" ]; then
+        chmod -R u+rwX "${SHARE_DIR}" 2>/dev/null || true
+        rm -rf "${SHARE_DIR}" 2>/dev/null || true
+    fi
 
     if [ -e "${TRIM_PKGVAR}" ]; then
         log_msg "WARN 数据目录仍然存在：${TRIM_PKGVAR}（请检查权限/占用）"
