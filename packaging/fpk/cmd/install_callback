@@ -587,15 +587,20 @@ install_hermes() {
             rm -rf "${VENV_DIR}" 2>/dev/null || true
         fi
 
-        log_msg "创建 Python 3.14 虚拟环境 ..."
-        "${UV_BIN}" venv --python 3.14 "${VENV_DIR}" >>"${LOG_FILE}" 2>&1 || true
-        if [ ! -x "${VENV_DIR}/bin/python3" ]; then
-            log_msg "Python 3.14 venv 创建失败，清理后重试一次"
-            rm -rf "${VENV_DIR}" 2>/dev/null || true
+        # 重新下载 uv 管理的 Python：残留/半下载的安装会缺 _sysconfigdata_，
+        # 表现为 “Python installation is missing a `_sysconfigdata_` file”。
+        rm -rf "${DATA_DIR}/pythons" "${VENV_DIR}" 2>/dev/null || true
+
+        local attempt
+        for attempt in 1 2; do
+            log_msg "创建 Python 3.14 虚拟环境（第 ${attempt} 次）..."
             "${UV_BIN}" venv --python 3.14 "${VENV_DIR}" >>"${LOG_FILE}" 2>&1 || true
-        fi
+            [ -x "${VENV_DIR}/bin/python3" ] && break
+            log_msg "Python 3.14 venv 创建失败，清除 pythons/uv 缓存后重试"
+            rm -rf "${VENV_DIR}" "${DATA_DIR}/pythons" "${UV_CACHE_DIR}" 2>/dev/null || true
+        done
         if [ ! -x "${VENV_DIR}/bin/python3" ]; then
-            toast_err "创建 Python 3.14 虚拟环境失败（当前上游要求 3.14）：$(tail -3 "${LOG_FILE}" 2>/dev/null)"
+            toast_err "创建 Python 3.14 虚拟环境失败（当前上游要求 3.14）：$(tail -5 "${LOG_FILE}" 2>/dev/null)"
             return 1
         fi
         log_msg "Python 版本：$("${VENV_DIR}/bin/python3" --version 2>&1)"

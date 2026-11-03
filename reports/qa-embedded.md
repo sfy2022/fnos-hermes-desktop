@@ -183,6 +183,23 @@
 产物：`dist/Hermes-Desktop-fnOS-v0.22.20-0f700158.fpk`，
 22,665,161 字节，SHA256 `a14a46fbead23bacdc5afc6fa8e0abaf75625f7108fc367a94690f7d1082453b`。
 
+### 4.8 0.22.21 Python 安装重试
+
+e5 安装 0.22.20 时报：
+
+```text
+error: Python installation is missing a `_sysconfigdata_` file
+```
+
+这是 uv 管理的 Python 3.14 安装残留/半下载导致。0.22.21：
+
+- 重建 venv 前删除 `@appdata/<app>/pythons` 与旧 venv；
+- 3.14 venv 首次失败后删除 `pythons` + `.uv-cache` 再重试一次；
+- 仍失败才向用户报错。
+
+产物：`dist/Hermes-Desktop-fnOS-v0.22.21-ac76ec4f.fpk`，
+22,676,204 字节，SHA256 `f867ccabd134886b850bf94eb9da554aa2564b8fe81d04ed573359f6d37f8007`。
+
 ## 5. 真机安装与内嵌验收（e5）
 
 在 e5 上安装本仓库重构包（`0.22.6`，含新 adapter/main/布局），`appcenter-cli` 安装成功、应用 running：
@@ -235,7 +252,7 @@
 - 分支：`refactor/embedded-gateway`（已推送，HEAD 见 GitHub）
 - CI：`.github/workflows/test.yml` 在分支上连续通过
   （例：run `41666246054`、`41666044281`、`41664090763`、`41662809087`、`41658183003`、`41657585799`）
-- 官方构建：`dist/Hermes-Desktop-fnOS-v0.22.16-fd267bb3.fpk`（0.22.16）与 `dist/Hermes-Desktop-fnOS-v0.22.17-fd267bb3.fpk`（0.22.17 真机修复）与 `dist/Hermes-Desktop-fnOS-v0.22.18-0f700158.fpk`（0.22.18 安装修复）、`dist/Hermes-Desktop-fnOS-v0.22.19-0f700158.fpk`（0.22.19）、`dist/Hermes-Desktop-fnOS-v0.22.20-0f700158.fpk`（0.22.20 配置迁移）
+- 官方构建：`dist/Hermes-Desktop-fnOS-v0.22.16-fd267bb3.fpk`（0.22.16）与 `dist/Hermes-Desktop-fnOS-v0.22.17-fd267bb3.fpk`（0.22.17 真机修复）与 `dist/Hermes-Desktop-fnOS-v0.22.18-0f700158.fpk`（0.22.18 安装修复）、`dist/Hermes-Desktop-fnOS-v0.22.19-0f700158.fpk`（0.22.19）、`dist/Hermes-Desktop-fnOS-v0.22.20-0f700158.fpk`（0.22.20 配置迁移）、`dist/Hermes-Desktop-fnOS-v0.22.21-ac76ec4f.fpk`（0.22.21 Python 安装重试）
 - 早期测试：`/tmp/hermes-build/hermes-desktop.fpk`（0.22.6，已安装到 e5）
 - 日志：`/tmp/official-build-0.22.16.log`、`/tmp/hermes-tests.log`、`/tmp/hermes-desktop-uninstall.log`、
   `/vol1/@appdata/hermes-desktop/{info.log,logs/gateway.log,gateway-adapter.log}`
