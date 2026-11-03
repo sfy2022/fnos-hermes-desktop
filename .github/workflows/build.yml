@@ -75,28 +75,8 @@ jobs:
             echo "上游 ${TAG} 已构建过（.upstream-release），跳过。需要重建请勾选 force。"
           fi
 
-          # 应用版本与上游 Release 完全一致。若本仓库已有更高版本（旧的手工版本），
-          # fnOS 不允许降级安装，跳过并等待上游发布更高版本。
-          if [ "${SHOULD}" = "true" ] && [ "${FORCE}" != "true" ]; then
-            EXISTING="$(git ls-remote --tags origin 2>/dev/null | sed 's#.*refs/tags/##; s/\^{}//')" || EXISTING=""
-            MAXTAG="$(echo "${EXISTING}" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-                      | sed 's/^v//' | sort -V | tail -1)"
-            # 过渡期版本下限：本仓库手工验证过 0.22.21（未发 Release），
-            # 低于它的官方 Release 无法在已安装该版本的设备上升级。
-            FLOOR="$(cat .version-floor 2>/dev/null | tr -d '[:space:]' || true)"
-            if [ -n "${FLOOR}" ]; then
-              MAXTAG="$(printf '%s\n%s\n' "${MAXTAG}" "${FLOOR}" \
-                        | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)"
-            fi
-            if [ -n "${MAXTAG}" ]; then
-              HIGHEST="$(printf '%s\n%s\n' "${VERSION}" "${MAXTAG}" | sort -V | tail -1)"
-              if [ "${HIGHEST}" != "${VERSION}" ]; then
-                SHOULD="false"
-                REASON="上游 ${TAG} 低于本仓库版本下限 ${MAXTAG}，避免 fnOS 降级，跳过"
-                echo "::warning::${REASON}"
-              fi
-            fi
-          fi
+          # 应用版本与上游 Release 完全一致；不再与本地旧 tag 比较。
+          # 旧的 0.22.13~0.22.21 是本地验证包，不是 Release；正式版本从官方 Release 重新对齐。
 
           SHA="$(git ls-remote https://github.com/NousResearch/hermes-agent.git \
             "refs/tags/${TAG}" "refs/tags/${TAG}^{}" 2>/dev/null \
