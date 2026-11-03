@@ -53,23 +53,31 @@
 
 | 项 | 值 |
 |---|---|
-| 版本 | **0.22.14** |
+| 版本 | **0.22.15** |
 | 上游 | `NousResearch/hermes-agent@fd267bb3`（main） |
-| 产物 | `dist/Hermes-Desktop-fnOS-v0.22.14-fd267bb3.fpk` |
-| 大小 | 22,951,480 字节 |
-| SHA256 | `9f549725484c09dfa98927a5b4596c3aafbe2d89097d46fb9e6e0843f82ac723` |
+| 产物 | `dist/Hermes-Desktop-fnOS-v0.22.15-fd267bb3.fpk` |
+| 大小 | 22,654,628 字节 |
+| SHA256 | `5cf60cfbddc1a7f812767a625a37dde903e838c21bafc76a90a7a81ea33c6f8b` |
 | 构建时门禁 | 布局检查 / 网关契约 / py_compile 均通过（build.sh §3.5） |
 | build-info | `/dist/build-info.json`（`bundle_files: 1079`） |
 
 分支 `.upstream-sha` 已更新为 `fd267bb3242a14c33d4899cffc60ee4be816f14d`。
-工作区已回传产物：`hermes-src/dist/Hermes-Desktop-fnOS-v0.22.14-fd267bb3.fpk`。
+工作区已回传产物：`hermes-src/dist/Hermes-Desktop-fnOS-v0.22.15-fd267bb3.fpk`。
 
-> 0.22.14 额外修复：iframe 刷新白屏 —— 裸挂载路径 `/app/hermes-desktop`（无尾斜杠）
-> 会让 `./assets/...` 相对路径解析到 `/app/assets/...` 而 302/404。adapter 现在对裸路径
-> 302 到 `/app/hermes-desktop/`，`app/ui/config` 的 `url` 也改为带尾斜杠。
+> 0.22.15 产品化变更：
+> - 桌面**只保留一个内嵌入口**，名称 `Hermes`；删除直连 `type=url` 图标，
+>   `desktop_applaunchname=hermes-desktop.Embedded`；端口 `9120` 写进 `manifest.desc` 提示。
+> - 图标换为**官方 Hermes 图标**（`apps/desktop/assets/icon-dark.png` 生成的
+>   64/256/512 全套），替换原像素风图标。
+> - 修复“卸载时选清除数据但数据目录仍在”：卸载日志不再 `mkdir -p $TRIM_PKGVAR`
+>   把目录重新创建；删除前 `cd /`，`rm -rf` 后二次 `find`/`rmdir` 校验；
+>   向导值兼容 `true/1/yes/on`。已在 e5 手工执行验证 `/vol1/@appdata/hermes-desktop` 被真正删除。
 >
-> e5 上当前安装的仍是验证用 `0.22.6` 包；`appcenter-cli` 不允许 CLI 升级，
-> 0.22.14 需在飞牛 Web UI 手动安装（会自动走升级、保留数据）。
+> 0.22.14 修复：iframe 刷新白屏 —— 裸挂载路径 `/app/hermes-desktop`（无尾斜杠）
+> 会让 `./assets/...` 相对路径解析到 `/app/assets/...` 而 302/404。adapter 对裸路径
+> 302 到 `/app/hermes-desktop/`，`app/ui/config` 的 `url` 也带尾斜杠。
+>
+> e5 上当前没有已安装实例（已卸载）；新包需在飞牛 Web UI 手动安装。
 
 ### 4.2 早期测试构建
 
@@ -116,24 +124,30 @@
    - adapter 对裸挂载路径 302 到 `/app/hermes-desktop/`；
    - `app/ui/config` 的内嵌 `url` 改为带尾斜杠；
    - 已用新 adapter 在 e5 验证裸路径返回 `302 Location: /app/hermes-desktop/`。
+5. **卸载选“清除数据”但数据目录仍在**：`delete_data` 删除 `TRIM_PKGVAR` 后，
+   `log_msg` 又 `mkdir -p` 把目录重新创建（只剩 `info.log`，偶发空 `venv/`）。
+   已修：卸载日志固定写 `/tmp/hermes-desktop-uninstall.log`（var 存在时才附带写）；
+   删除前 `cd /`，`rm -rf` 后二次 `find`/`rmdir` 校验并记录 WARN；
+   向导值兼容 `true/1/yes/on`。已在 e5 手工执行，`/vol1/@appdata/hermes-desktop` 被真正删除。
 
 ### 5.2 未执行/未验证
 
 - `appcenter-cli install-fpk` 对已安装应用提示“请从 Web UI 卸载”，**升级路径未执行**；
-  0.22.14 升级包已构建并通过布局/契约门禁，待 UI 或干净设备验证。
+  0.22.15 安装包已构建并通过布局/契约门禁，待 UI 或干净设备验证。
   真机测试使用 0.22.6 包 + 手工修正符号链接，因此 §5.1 的修复在真机上是“修复后行为已验证、
   修复代码本身待下次全新安装验证”。
 - 浏览器 iframe 实际渲染、fnOS 桌面内嵌窗口未执行（e5 无浏览器；网关需飞牛登录态）。
-  用户反馈 0.22.6 测试包内嵌可登录、刷新白屏，已据此修复并构建 0.22.14。
+  用户反馈 0.22.6 测试包内嵌可登录、刷新白屏，已据此修复并构建 0.22.14/0.22.15。
+- 0.22.15 的“单入口 + 官方图标 + 卸载删除”已做静态/包内容检查，待用户安装后验收。
 
 ## 6. 证据与产物
 
 - 分支：`refactor/embedded-gateway`（已推送，HEAD 见 GitHub）
 - CI：`.github/workflows/test.yml` 在分支上连续通过
   （例：run `41666246054`、`41666044281`、`41664090763`、`41662809087`、`41658183003`、`41657585799`）
-- 官方构建：`dist/Hermes-Desktop-fnOS-v0.22.14-fd267bb3.fpk`（0.22.14 / 上游 fd267bb3）
+- 官方构建：`dist/Hermes-Desktop-fnOS-v0.22.15-fd267bb3.fpk`（0.22.15 / 上游 fd267bb3）
 - 早期测试：`/tmp/hermes-build/hermes-desktop.fpk`（0.22.6，已安装到 e5）
-- 日志：`/tmp/official-build-0.22.14b.log`、`/tmp/hermes-tests.log`、`/tmp/install.log`、
+- 日志：`/tmp/official-build-0.22.15.log`、`/tmp/hermes-tests.log`、`/tmp/hermes-desktop-uninstall.log`、
   `/vol1/@appdata/hermes-desktop/{info.log,logs/gateway.log,gateway-adapter.log}`
 
 ### 6.1 PR 创建状态

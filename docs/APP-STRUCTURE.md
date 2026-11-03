@@ -123,7 +123,7 @@ packaging/fpk/
 | `source` | `thirdparty` | — |
 | `maintainer` / `maintainer_url` / `distributor` / `distributor_url` | 保留现值 | 第三方分发信息 |
 | `desktop_uidir` | `ui` | 入口配置在 `app/ui/config` |
-| `desktop_applaunchname` | `hermes-desktop.Application` | 必须等于入口 ID |
+| `desktop_applaunchname` | `hermes-desktop.Embedded` | 必须等于入口 ID |
 | `service_port` | `9120` | 上游 webapp 端口；入口 `port` 必须与之一致 |
 | `checkport` | `false` | 端口自检关闭（应用自管端口冲突处理） |
 | `ctl_stop` | `true` | 需要启停 |
@@ -163,18 +163,17 @@ packaging/fpk/
 - 禁止自定义 `TRIM_` 前缀字段；`password` 类型字段的值不得写入日志或报告。
 - 当前 `install`（访问账号 + 网络配置）、`config`（说明页）、`upgrade`、`uninstall` 均存在，结构合规。
 
-### 4.6 `app/ui/config`（双入口）
+### 4.6 `app/ui/config`（单入口：桌面内嵌）
 
-目标语义（字段命名保持现有 ID，不改用户可见行为）：
+产品决定（2026-11-04）：桌面只保留**一个**内嵌入口，直连不再建图标，端口写在 `manifest.desc` 提示。
 
 | 入口 ID | `type` | 关键字段 | 约束 |
 |---|---|---|---|
-| `hermes-desktop.Application` | `url` | `protocol=http`、`port=9120`、`url=/` | 浏览器直连入口；`port` 必须是应用端口，**不得写 5666**（写宿主端口会让整份入口失效，历史踩坑见 IMPLEMENTATION.md） |
-| `hermes-desktop.Embedded` | `iframe` | `gatewayPrefix=/app/hermes-desktop`、`gatewaySocket=app.sock`、`url=/app/hermes-desktop` | 桌面内嵌入口；`gatewayPrefix`/`gatewaySocket` 必须与 `app/runtime/gateway/gateway.conf` 完全一致；不写 `port` |
+| `hermes-desktop.Embedded` | `iframe` | `title=Hermes`、`gatewayPrefix=/app/hermes-desktop`、`gatewaySocket=app.sock`、`url=/app/hermes-desktop/` | 唯一桌面入口；`gatewayPrefix`/`gatewaySocket` 必须与 `app/runtime/gateway/gateway.conf` 完全一致；不写 `protocol`/`port` |
 
-`desktop_applaunchname` 指向 `Application`（浏览器入口为默认打开方式）；`Embedded` 保留给桌面内嵌与排障。
-当前实现（2026-11-03）：`Embedded` 的 `control.accessPerm=readonly`；两入口的 `gatewayPrefix`/`gatewaySocket`/`port`
-已与 `gateway.conf`、`manifest.service_port` 一致，且由 `scripts/check_fpk_layout.py` 自动校验。
+`desktop_applaunchname` 指向 `hermes-desktop.Embedded`；`control.accessPerm=readonly` 保持只读。
+直连 `http://<NAS_IP>:9120` 仍可用，但不在桌面创建图标，只在应用介绍（`manifest.desc`）与 README 提示。
+`scripts/check_fpk_layout.py` 不再要求直连 `type=url` 入口。
 
 ### 4.7 `app/runtime/gateway/gateway.conf`
 
@@ -255,7 +254,7 @@ socket_name=app.sock
 | 9 | `config/resource` | `{}` | ✅ 已为 `{}` |
 | 10 | 配置落点 | `config.yaml`/`access-info.txt` 写 `TRIM_PKGETC` | ✅ etc 实体 + `var/config.yaml -> ../etc/config.yaml`；install/main/upgrade 均迁移 |
 | 11 | `access-info.txt` | `etc/`（0600） | ✅ 已写 etc 0600 |
-| 12 | `app/ui/config` | 双入口、网关字段一致 | ✅ 一致（布局/契约检查器校验；内嵌入口 `accessPerm=readonly`） |
+| 12 | `app/ui/config` | 单内嵌入口（title=Hermes）、网关字段一致 | ✅ 一致（布局/契约检查器校验；`accessPerm=readonly`） |
 | 13 | `cmd/main` | 启动 adapter、读 `gateway.conf` | ✅ 从 `target/runtime/gateway/` 启动；健康自检；无 9121/launch 死代码 |
 | 14 | `app/webapp/` | 构建注入、不入库 | ✅ 已 gitignore；`build.sh` 每次 `rm -rf` 后复制 |
 | 15 | 检查脚本 | `check_fpk_layout.py` + `check_gateway_contract.py` | ✅ 均已交付；模板/组装模式均 exit 0 |
@@ -358,6 +357,6 @@ find packaging/fpk \( -name '__pycache__' -o -name '*.pyc' -o -name '*.bak' \
 | 3 | `var/` 下契约未枚举的运行期目录（`bin/pythons/.uv-cache/lib/workspace/skills/plugins/desktop-plugins`） | 离线布局检查只覆盖包结构；运行期目录待真机确认 |
 | 4 | `app/skills/` 内 arm64 `trim-cli` 与 `platform=x86` | 保留双架构二进制、只发 x86 包；布局检查器给出 `PKG-ARCH-03` 警告 |
 | 5 | `etc/` 权限 | 已冻结：文件 0600、目录 0700（见契约 §3.2） |
-| 6 | 网页直连入口与内嵌入口的默认打开方式 | 当前 `desktop_applaunchname=hermes-desktop.Application`；是否改为内嵌入口待产品确认 |
+| 6 | 桌面入口与直连提示 | 已按产品决定：唯一桌面入口 `Hermes`（`desktop_applaunchname=hermes-desktop.Embedded`）；直连不建图标，端口写入 `manifest.desc` |
 | 7 | adapter `--log-file` | 已实现（可选；`cmd/main` 仍重定向到 `var/gateway-adapter.log`） |
 | 8 | 真机安装/升级验收 | e5 已安装 0.22.6 并验证 adapter/登录/CSP/WS；升级因 `appcenter-cli` 限制未执行；`var` 符号链接缺陷已修复（见 `reports/qa-embedded.md`） |

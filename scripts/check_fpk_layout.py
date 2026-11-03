@@ -106,7 +106,7 @@ MANIFEST_FROZEN = {
     "source": "thirdparty",
     "platform": "x86",
     "desktop_uidir": "ui",
-    "desktop_applaunchname": f"{APPNAME}.Application",
+    "desktop_applaunchname": f"{APPNAME}.Embedded",
     "service_port": EXPECTED_SERVICE_PORT,
     "checkport": "false",
     "ctl_stop": "true",
@@ -652,13 +652,8 @@ class LayoutChecker:
                 "桌面内嵌链路无法建立",
                 rel,
             )
-        if not has_direct:
-            self.warn(
-                "PKG-ENTRY-07",
-                "缺少直连 url 入口（端口 "
-                f"{self.service_port}），浏览器直连入口不可用",
-                rel,
-            )
+        # 产品决定：桌面只保留内嵌图标，直连仅通过 manifest.desc 提示端口，
+        # 因此不再要求 ui/config 里必须有 type=url 的直连入口。
 
         expected_id = getattr(self, "expected_entry_id", "")
         if expected_id and expected_id not in entries:

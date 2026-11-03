@@ -1,16 +1,7 @@
 {
     ".url": {
-        "hermes-desktop.Application": {
-            "title": "Hermes Desktop",
-            "icon": "images/icon_{0}.png",
-            "type": "url",
-            "protocol": "http",
-            "port": "9120",
-            "url": "/",
-            "allUsers": true
-        },
         "hermes-desktop.Embedded": {
-            "title": "Hermes Desktop (桌面内嵌)",
+            "title": "Hermes",
             "icon": "images/icon_{0}.png",
             "type": "iframe",
             "gatewayPrefix": "/app/hermes-desktop",

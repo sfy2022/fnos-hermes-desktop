@@ -37,7 +37,7 @@ maintainer_url="https://github.com/NousResearch/hermes-agent"
 distributor="tester"
 distributor_url="https://example.invalid/repo"
 desktop_uidir="ui"
-desktop_applaunchname="hermes-desktop.Application"
+desktop_applaunchname="hermes-desktop.Embedded"
 service_port="9120"
 checkport="false"
 ctl_stop="true"
@@ -46,22 +46,13 @@ install_dep_apps="python312"
 
 ENTRY_CONFIG = {
     ".url": {
-        "hermes-desktop.Application": {
-            "title": "Hermes Desktop",
-            "icon": "images/icon_{0}.png",
-            "type": "url",
-            "protocol": "http",
-            "port": "9120",
-            "url": "/",
-            "allUsers": True,
-        },
         "hermes-desktop.Embedded": {
-            "title": "Hermes Desktop (Embedded)",
+            "title": "Hermes",
             "icon": "images/icon_{0}.png",
             "type": "iframe",
             "gatewayPrefix": "/app/hermes-desktop",
             "gatewaySocket": "app.sock",
-            "url": "/app/hermes-desktop",
+            "url": "/app/hermes-desktop/",
             "allUsers": True,
         },
     }

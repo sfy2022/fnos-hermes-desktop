@@ -68,6 +68,24 @@ class ShellContractTests(unittest.TestCase):
         self.assertIn("runtime/lib/libs.sh", install)
         self.assertNotIn("cmd/libs.sh", install)
 
+    def test_uninstall_delete_data_is_real(self) -> None:
+        """Deleting data must not be undone by logging recreating TRIM_PKGVAR."""
+        uninstall = read("uninstall_callback")
+        self.assertIn("UNINSTALL_LOG", uninstall)
+        self.assertNotIn('mkdir -p "${LOG_DIR}"', uninstall)
+        self.assertIn("cd / 2>/dev/null", uninstall)
+        self.assertIn("WARN 数据目录仍然存在", uninstall)
+        self.assertIn("true|1|yes|on", uninstall)
+
+    def test_single_embedded_entry(self) -> None:
+        import json
+
+        ui = json.loads((REPO / "packaging" / "fpk" / "app" / "ui" / "config").read_text())
+        entries = ui[".url"]
+        self.assertEqual(list(entries), ["hermes-desktop.Embedded"])
+        self.assertEqual(entries["hermes-desktop.Embedded"]["title"], "Hermes")
+        self.assertNotIn("Application", entries)
+
 
 class GatewayConfigContractTests(unittest.TestCase):
     def test_ui_and_conf_agree(self) -> None:

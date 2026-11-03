@@ -1,7 +1,7 @@
 appname="hermes-desktop"
 version="0.22.6"
 display_name="Hermes Desktop"
-desc="NousResearch 出品的 AI Agent 工作区，完整运行在飞牛 NAS 上。对话流式输出、工具调用可视化、并排预览、文件浏览、Artifacts、定时任务、多 Profile、技能管理、终端栏、Git 审阅一应俱全，内置飞牛 NAS 技能，装完即可操控本机。基于官方 Webapp 形态（gateway 内建渲染层），无需 Electron。支持浏览器直连与飞牛桌面内嵌两种入口。"
+desc="NousResearch 出品的 AI Agent 工作区，完整运行在飞牛 NAS 上。对话流式输出、工具调用可视化、并排预览、文件浏览、Artifacts、定时任务、多 Profile、技能管理、终端栏、Git 审阅一应俱全，内置飞牛 NAS 技能，装完即可操控本机。基于官方 Webapp 形态（gateway 内建渲染层），无需 Electron。桌面只有内嵌入口（Hermes）；直连请浏览器访问 http://<NAS_IP>:9120。"
 platform="x86"
 source="thirdparty"
 
@@ -11,7 +11,7 @@ distributor="巴盟女婿"
 distributor_url="https://github.com/sfy2022/fnos-hermes-desktop"
 
 desktop_uidir="ui"
-desktop_applaunchname="hermes-desktop.Application"
+desktop_applaunchname="hermes-desktop.Embedded"
 service_port="9120"
 # 桌面内嵌入口走 fnOS 统一网关：iframe 的 src 落在 :5666 下（与飞牛桌面
 # 同源），浏览器才会把会话 Cookie 一并带上；直接指向 :9120 属跨源，

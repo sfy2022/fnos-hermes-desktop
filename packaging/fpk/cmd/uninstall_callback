@@ -25,6 +25,8 @@
 
 LOG_DIR="${TRIM_PKGVAR}"
 LOG_FILE="${LOG_DIR}/info.log"
+# 卸载日志同时写 /tmp：删除数据后不能再 mkdir 恢复 var 目录（否则看起来“没删干净”）。
+UNINSTALL_LOG="/tmp/hermes-desktop-uninstall.log"
 PID_FILE="${LOG_DIR}/app.pid"
 ETC_DIR="${TRIM_PKGETC:-$(dirname "${LOG_DIR}")/etc}"
 ADAPTER_PID_FILE="${LOG_DIR}/gateway-adapter.pid"
@@ -33,12 +35,18 @@ GATEWAY_SOCKET="${TRIM_APPDEST}/app.sock"
 
 # 向导里用户的选择："true" 表示清除数据
 DELETE_DATA="${wizard_delete_data:-false}"
+# 兼容 select/switch/radio 可能给出的真值写法
+case "$(printf '%s' "${DELETE_DATA}" | tr '[:upper:]' '[:lower:]')" in
+    true|1|yes|on) DELETE_DATA="true" ;;
+    *)             DELETE_DATA="false" ;;
+esac
 
 log_msg() {
-    # 数据目录可能已被删除；写不进去就跳过，不报错
-    mkdir -p "${LOG_DIR}" 2>/dev/null || true
-    [ -d "${LOG_DIR}" ] || return 0
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - [uninstall_callback] $1" >> "${LOG_FILE}" 2>/dev/null || true
+    local line
+    line="$(date '+%Y-%m-%d %H:%M:%S') - [uninstall_callback] $1"
+    # /tmp 永远可写，且不会把已删除的 var 目录重新创建出来
+    echo "${line}" >> "${UNINSTALL_LOG}" 2>/dev/null || true
+    [ -d "${LOG_DIR}" ] && echo "${line}" >> "${LOG_FILE}" 2>/dev/null || true
 }
 
 # 从 gateway.conf 解析 socket 名（单一来源；缺失时退回 app.sock）
@@ -153,9 +161,15 @@ delete_data() {
     backup="$(archive_data)"
     log_msg "数据归档完成：${backup:-（未能归档）}"
 
-    # 删除运行数据目录本体（fnOS 只保留 var，需要应用自己删）
+    # 从 / 执行删除：如果 shell 的 cwd 恰好在 var 里，rm 无法删除 cwd 本身，
+    # 会留下空目录；切到 / 后重试。
+    cd / 2>/dev/null || true
     if [ -d "${TRIM_PKGVAR}" ]; then
         rm -rf "${TRIM_PKGVAR}" 2>/dev/null || true
+    fi
+    if [ -e "${TRIM_PKGVAR}" ]; then
+        find "${TRIM_PKGVAR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
+        rmdir "${TRIM_PKGVAR}" 2>/dev/null || true
     fi
 
     # etc 由 fnOS 卸载时删除；若仍存在则清掉敏感配置
@@ -167,7 +181,11 @@ delete_data() {
     # home 下的应用配置（trim-cli OAuth 凭据）
     rm -rf "${TRIM_PKGHOME}/.config/trim-cli" 2>/dev/null || true
 
-    log_msg "已按用户选择清除应用数据"
+    if [ -e "${TRIM_PKGVAR}" ]; then
+        log_msg "WARN 数据目录仍然存在：${TRIM_PKGVAR}（请检查权限/占用）"
+    else
+        log_msg "已按用户选择清除应用数据"
+    fi
 }
 
 stop_app_processes

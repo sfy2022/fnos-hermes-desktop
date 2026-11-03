@@ -27,14 +27,14 @@
  127.0.0.1:9120  hermes gateway（官方 webapp 渲染层）
    │  Agent / 工具 / 会话 / 技能 / 定时任务
    ▼
- 浏览器直连入口（另一个图标）：http://<nas>:9120 —— 不经过 adapter，CSP 保持 'none'
+ 浏览器直连（无桌面图标）：http://<nas>:9120 —— 不经过 adapter，CSP 保持 'none'
 ```
 
 要点：
 
 - **内嵌窗口必须与飞牛桌面同源**（`:5666`）。iframe 直指 `:9120` 是跨源，`SameSite=lax` 的会话 Cookie 不会发送，表现就是反复登录/空白。
 - 网关只保证「已登录 NAS」，**不负责应用业务鉴权**；应用侧的认证仍由上游 `dashboard.basic_auth` 把关。
-- 直连入口与内嵌入口访问同一后端、同一份会话，区别只在「是否经过 adapter」。
+- 桌面只有内嵌入口 `Hermes`；直连不建图标，仅通过端口/README 提示，访问同一后端与同一份会话，区别只在「是否经过 adapter」。
 
 官方依据（摘要）：[统一网关](https://developer.fnnas.com/docs/core-concepts/gateway-registration/) 规定了
 `gatewayPrefix`/`gatewaySocket` 语义、请求先校验会话再转发、以及 `X-Trim-Userid` 等用户 Header；
