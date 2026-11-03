@@ -704,6 +704,56 @@ verify_fnos_skill() {
     return 1
 }
 
+# 安装时先写配置、后建 venv，因此首次安装拿不到 scrypt 哈希，
+# apply_wizard_settings 会回退 host=127.0.0.1（仅本机）。依赖装好后在这里补一次：
+# 生成哈希 → 改为 0.0.0.0 → 写入 dashboard.basic_auth，恢复局域网直连。
+finalize_webapp_auth() {
+    local cfg="${CONFIG_FILE}"
+    [ -f "${cfg}" ] || return 0
+    local cur_host
+    cur_host="$(sed -n 's/^[[:space:]]*host:[[:space:]]*//p' "${cfg}" 2>/dev/null \
+        | head -n 1 | tr -d '"[:space:]')"
+    if [ "${cur_host}" != "127.0.0.1" ] && [ "${cur_host}" != "localhost" ]; then
+        return 0
+    fi
+    if grep -qE '^[[:space:]]*basic_auth:' "${cfg}" 2>/dev/null; then
+        return 0
+    fi
+
+    local pass="${wizard_web_pass:-}"
+    if [ -z "${pass}" ] && [ -f "${ACCESS_INFO}" ]; then
+        pass="$(sed -n 's/^密码:[[:space:]]*//p' "${ACCESS_INFO}" 2>/dev/null | head -n 1)"
+    fi
+    [ -n "${pass}" ] || { log_msg "未拿到向导密码，保持 host=127.0.0.1"; return 0; }
+
+    local hash=""
+    if [ -x "${VENV_DIR}/bin/python3" ]; then
+        hash="$(HERMES_PW="${pass}" \
+            env HOME="${TRIM_PKGHOME:-${DATA_DIR}}" \
+                HERMES_HOME="${DATA_DIR}" \
+                PYTHONPATH="${SRC_DIR}" \
+                "${VENV_DIR}/bin/python3" -c \
+                'import os; from plugins.dashboard_auth.basic import hash_password; print(hash_password(os.environ["HERMES_PW"]))' \
+            2>>"${LOG_FILE}" | tail -n 1)"
+    fi
+    if [ -z "${hash}" ]; then
+        log_msg "补写认证失败：仍保持 host=127.0.0.1（仅本机可访问）"
+        return 0
+    fi
+
+    sed -i "s/^[[:space:]]*host:[[:space:]]*.*/  host: 0.0.0.0/" "${cfg}" 2>/dev/null || true
+    cat >> "${cfg}" <<EOF
+
+# 认证提供方（依赖装好后补写；绑 0.0.0.0 时必需）
+dashboard:
+  basic_auth:
+    username: ${wizard_web_user:-admin}
+    password_hash: "${hash}"
+EOF
+    chmod 600 "${cfg}" 2>/dev/null || true
+    log_msg "已补写 dashboard.basic_auth，webapp 恢复绑定 0.0.0.0（局域网可访问）"
+}
+
 # ── 主流程 ──────────────────────────────────────────────────────────────
 log_msg "=== install_callback 开始 ==="
 log_msg "DATA_DIR=${DATA_DIR}"
@@ -717,6 +767,7 @@ apply_wizard_settings || exit 1
 ensure_uv || exit 1
 fetch_source || exit 1
 install_hermes || exit 1
+finalize_webapp_auth
 deploy_fnos_skill
 deploy_bundled_plugins
 verify_fnos_skill || log_msg "飞牛 Skill 部署校验未通过，但不影响主功能"

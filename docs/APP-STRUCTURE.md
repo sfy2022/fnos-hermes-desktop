@@ -2,7 +2,7 @@
 
 > **决策源**：[REFACTOR-CONTRACT.md](./REFACTOR-CONTRACT.md)（冻结契约）。本文只做落地展开，冲突以契约为准。
 > **适用范围**：`packaging/fpk/`（源目录）与安装后的 `/var/apps/hermes-desktop/`（运行期布局）。
-> **当前状态基线**：2026-11-03 22:45 对本仓库镜像的实测快照（重构由各成员并行推进）。
+> **当前状态基线**：2026-11-03 重构完成后状态（e5 真机安装验收见 §8）。
 > 「当前」列只代表该时刻事实；最新状态以 `python3 scripts/check_fpk_layout.py packaging/fpk` 输出为准。
 > **官方依据**：包规范主要来自飞牛官方 fnpack/framework 页，字段语义来自 manifest/privilege/resource/wizard 页（见 §3 链接表）。
 
@@ -265,45 +265,37 @@ socket_name=app.sock
 
 ### 6.2 剩余迁移步骤（在 e5 上执行，命令可复制）
 
-> ⚠️ 结构调整（建目录、`mv libs.sh`、删除旧 adapter）**已由 fpk-builder 完成**，不要重复执行——
-> 再跑 `mv` 会因源文件不存在而报错。下面是**尚未完成**的步骤。
+> 结构调整与落点迁移已完成；下面是**重构后**的验证/安装步骤（可直接复制）。
+> 旧 `var/gateway_proxy.py`/`fnos_bridge.py` 副本由 install/upgrade 自动清理，无需手工。
 
 ```bash
 # 0) 前置（仓库根目录，Node 26 在 PATH）
 node -v            # 期望 v26.x（上游 build-webapp.mjs 要求 >= 26）
 python3 -V
 
-# 1) 清理旧适配层在数据目录的残留（旧版本曾部署副本到 var/）
-rm -f /var/apps/hermes-desktop/var/gateway_proxy.py \
-      /var/apps/hermes-desktop/var/fnos_bridge.py \
-      /var/apps/hermes-desktop/var/gateway-proxy.pid \
-      /var/apps/hermes-desktop/var/gateway-proxy.log
+# 1) 布局检查（模板模式自动放行缺失 app/webapp）
+python3 scripts/check_fpk_layout.py packaging/fpk --template
 
-# 2) 布局检查（已可执行；模板模式自动放行缺失 app/webapp）
-#    当前实测：exit 0，违规 0 / 警告 3
-#    （PKG-APP-04 缺 app/webapp、PKG-ARCH-03 platform=x86 但含 arm64 二进制、PKG-MODE-01 模板模式）
-python3 scripts/check_fpk_layout.py packaging/fpk
-
-# 3) 内嵌契约检查（脚本待 fpk-qa 交付；缺失会导致 build.sh 直接失败）
+# 2) 内嵌契约检查
 python3 scripts/check_gateway_contract.py packaging/fpk
 
-# 4) 单测（当前实测：Ran 14 tests，OK）
+# 3) 单测（Linux 全量；Windows 会 skip 12 个 AF_UNIX 用例）
 python3 -m unittest discover -s tests -v
 
-# 5) 构建（门禁齐套后才可能成功；APP_VERSION 按契约示例）
+# 4) 构建（APP_VERSION 按契约示例；CI/e5 上执行）
 APP_VERSION=0.22.13 bash scripts/build.sh
 
-# 6) 安装（若需 root 停下报告，不用 sudo 密码）
-appcenter-cli install-fpk dist/*.fpk
+# 5) 安装（若需 root 停下报告，不用 sudo 密码）
+appcenter-cli install-fpk dist/*.fpk --env wizard.env
 
-# 7) 安装后布局抽查
-ls -l  /var/apps/hermes-desktop/etc/               # 迁移完成后：config.yaml/access-info.txt/gateway.conf，0600
-ls -l  /var/apps/hermes-desktop/var/config.yaml    # 迁移完成后：-> ../etc/config.yaml
-ls -l  /var/apps/hermes-desktop/target/app.sock    # adapter 运行后应存在
+# 6) 安装后布局抽查（配置文件在 etc，运行数据在 var）
+ls -l /var/apps/hermes-desktop/etc/               # config.yaml/access-info.txt/gateway.conf，0600
+ls -l /var/apps/hermes-desktop/var/config.yaml    # -> ../etc/config.yaml
+ls -l /var/apps/hermes-desktop/target/app.sock    # adapter 运行后应存在
 ```
 
-> **当前阶段提醒**：第 7 步的 `etc/` 路径要等 `cmd/main` 与 `install_callback` 完成落点迁移后才成立；
-> 在此之前抽查 `var/`（现有实现），不要把「路径不对」误报成缺陷。
+> 之前的旧 `$DATA_DIR/gateway_proxy.py`/`fnos_bridge.py` 副本已由 install/upgrade 清理；
+> 若从很早的版本升级，`cmd/main diagnose` 会显示 adapter 版本与两级 CSP，可确认新代码生效。
 
 ### 6.3 卸载/升级时的数据边界
 
