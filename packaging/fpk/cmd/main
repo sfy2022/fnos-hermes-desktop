@@ -246,6 +246,52 @@ EOF
     log_msg "已生成 webapp 配置与访问信息（见 ${ACCESS_INFO}）"
 }
 
+# 安装/升级早期 venv 尚未就绪时无法生成 scrypt 哈希，配置会回退到 127.0.0.1。
+# 运行期（venv 已存在）补一次：从 etc/access-info.txt 取密码，补 basic_auth 并恢复 0.0.0.0。
+finalize_webapp_auth() {
+    local cfg="${CONFIG_FILE}"
+    [ -f "${cfg}" ] || return 0
+    local cur_host
+    cur_host="$(sed -n 's/^[[:space:]]*host:[[:space:]]*//p' "${cfg}" 2>/dev/null \
+        | head -n 1 | tr -d '"[:space:]')"
+    if [ "${cur_host}" != "127.0.0.1" ] && [ "${cur_host}" != "localhost" ]; then
+        return 0
+    fi
+    grep -qE '^[[:space:]]*basic_auth:' "${cfg}" 2>/dev/null && return 0
+    [ -f "${ACCESS_INFO}" ] || return 0
+    [ -x "${VENV_DIR}/bin/python3" ] || return 0
+
+    local pass user hash
+    pass="$(sed -n 's/^密码:[[:space:]]*//p' "${ACCESS_INFO}" 2>/dev/null | head -n 1)"
+    user="$(sed -n 's/^用户名:[[:space:]]*//p' "${ACCESS_INFO}" 2>/dev/null | head -n 1)"
+    [ -n "${pass}" ] || return 0
+    [ -n "${user}" ] || user="admin"
+
+    hash="$(HERMES_PW="${pass}" \
+        env HOME="${TRIM_PKGHOME:-${DATA_DIR}}" \
+            HERMES_HOME="${DATA_DIR}" \
+            PYTHONPATH="${SRC_DIR}" \
+            "${VENV_DIR}/bin/python3" -c \
+            'import os; from plugins.dashboard_auth.basic import hash_password; print(hash_password(os.environ["HERMES_PW"]))' \
+        2>>"${LOG_FILE}" | tail -n 1)"
+    if [ -z "${hash}" ]; then
+        log_msg "补写 dashboard.basic_auth 失败，保持 host=127.0.0.1"
+        return 0
+    fi
+
+    sed -i "s/^[[:space:]]*host:[[:space:]]*.*/  host: 0.0.0.0/" "${cfg}" 2>/dev/null || true
+    cat >> "${cfg}" <<EOF
+
+# 认证提供方（运行期补写；绑 0.0.0.0 时必需）
+dashboard:
+  basic_auth:
+    username: ${user}
+    password_hash: "${hash}"
+EOF
+    chmod 600 "${cfg}" 2>/dev/null || true
+    log_msg "已补写 dashboard.basic_auth，webapp 恢复绑定 0.0.0.0"
+}
+
 SKILL_DIR="${DATA_DIR}/skills/fnos-trim"
 
 # 启动时自愈：若 skills 目录被 Hermes postinstall 覆盖导致 Skill 丢失，
@@ -425,6 +471,7 @@ start_process() {
     ensure_home_layout
     pick_port || return 1
     ensure_webapp_config
+    finalize_webapp_auth
     heal_fnos_skill || log_msg "飞牛 Skill 补回失败（如需请手动安装官方 fnOS Skill）"
 
     # HERMES_HOME 指向应用数据目录（var）：会话、技能、记忆、运行数据都在这里；

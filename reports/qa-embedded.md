@@ -51,8 +51,15 @@
   `dist-webapp`**（v0.22.12，`app.tgz` / `webapp`）作为渲染层，与本仓库 `packaging/fpk`
   组装后经 `fnpack 1.2.4` 打包，用于验证适配层/目录/安装链路；生产构建仍走
   `scripts/build.sh` + CI（Node 26）。
-- 组装包通过 `check_fpk_layout.py`、`check_gateway_contract.py`、`py_compile`。
-- 产物路径/大小/哈希：见 §6 证据。
+- 组装包通过 `check_fpk_layout.py`（违规 0，仅 `PKG-ARCH-03` 臂警告）、
+  `check_gateway_contract.py`（0/0）、`py_compile`。
+- 产物：`/tmp/hermes-build/hermes-desktop.fpk`（约 22MB，manifest `0.22.6`，测试首装）；
+  另外构建了 `0.22.13` 升级包 `/tmp/hermes-build/upgrade-out/hermes-desktop.fpk`。
+- 构建过程中发现并修复两个真实问题：
+  1. 组装脚本把 `__pycache__` 带进包（已改为 `PYTHONPYCACHEPREFIX` 并清理）；
+  2. **首装时 venv 尚未建立，scrypt 哈希生成失败 → 配置回退 `host=127.0.0.1`（局域网直连失效）**。
+     已在 `install_callback` 增加 `finalize_webapp_auth`（装完依赖后补哈希并恢复 `0.0.0.0`），
+     并在 `cmd/main` 增加运行期自愈（升级后 start 也会补）。
 
 ## 5. 真机安装与内嵌验收（e5）
 
