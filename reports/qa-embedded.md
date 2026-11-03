@@ -17,8 +17,8 @@
 
 | 项 | 命令 | 结果 |
 |---|---|---|
-| 单元/集成测试（Windows） | `python -m unittest discover -s tests` | 71 tests OK（12 个 AF_UNIX 用例 skip） |
-| 单元/集成测试（e5 Linux） | `python3 -m unittest discover -s tests` | **71 tests OK（全量，含 AF_UNIX/WS）** |
+| 单元/集成测试（Windows） | `python -m unittest discover -s tests` | 72 tests OK（12 个 AF_UNIX 用例 skip） |
+| 单元/集成测试（e5 Linux） | `python3 -m unittest discover -s tests` | **72 tests OK（全量，含 AF_UNIX/WS）** |
 | 布局检查（源码/模板） | `python3 scripts/check_fpk_layout.py packaging/fpk --template` | exit 0，违规 0；警告：缺 `app/webapp`（构建注入）、含 arm64 二进制 |
 | 网关契约 | `python3 scripts/check_gateway_contract.py packaging/fpk` | exit 0，违规/警告 0 |
 | Shell 语法（e5） | `bash -n` 全部 cmd/runtime/scripts | 通过 |
@@ -113,6 +113,29 @@
 - 初始 `.upstream-release=v0.22.6`（当前上游最新 Release）；因此向导精简等打包改动**不会自动出新包**，
   等上游发布下一个 Release 才会构建。
 
+### 4.4 0.22.17 真机缺陷修复（手工构建）
+
+0.22.16 在真机上出现两个问题，已修复并手工构建 0.22.17：
+
+| 项 | 值 |
+|---|---|
+| 版本 | **0.22.17** |
+| 上游 | `fd267bb3` |
+| 产物 | `dist/Hermes-Desktop-fnOS-v0.22.17-fd267bb3.fpk` |
+| 大小 | 22,657,328 字节 |
+| SHA256 | `1511de7ddd729e92048835bbb1f811510225375f40b0fc0ab69b46e6b7cc34e9` |
+
+- **空密码哈希导致 `Sign in to Hermes`**：首装 venv 未就绪时写了
+  `dashboard.basic_auth.password_hash: ""`，后续 finalize 只检查“有没有 basic_auth”就跳过，
+  最终 host 停在 127.0.0.1、认证为空，上游浏览器端显示
+  “Run `hermes webapp` on this computer…”。
+  修复：首装哈希为空时不写 dashboard 段；install/main 的 finalize 改为检查
+  `password_hash` 是否为有效 `scrypt$…`，空哈希就地补全（不追加重复段），并恢复 `host=0.0.0.0`。
+  已在 e5 手工补哈希后验证：未登录请求 302 到 `/login`，登录页出现用户名/密码，不再显示
+  “Run hermes webapp”。
+- **应用数据目录权限**：`@appdata` 之前是 700，应用中心/管理端看不到内容；改为 770
+  （与其它 fnOS 应用一致），运行时 `ensure_home_layout` 也会自愈。
+
 ## 5. 真机安装与内嵌验收（e5）
 
 在 e5 上安装本仓库重构包（`0.22.6`，含新 adapter/main/布局），`appcenter-cli` 安装成功、应用 running：
@@ -165,7 +188,7 @@
 - 分支：`refactor/embedded-gateway`（已推送，HEAD 见 GitHub）
 - CI：`.github/workflows/test.yml` 在分支上连续通过
   （例：run `41666246054`、`41666044281`、`41664090763`、`41662809087`、`41658183003`、`41657585799`）
-- 官方构建：`dist/Hermes-Desktop-fnOS-v0.22.16-fd267bb3.fpk`（0.22.16 / 上游 fd267bb3）
+- 官方构建：`dist/Hermes-Desktop-fnOS-v0.22.16-fd267bb3.fpk`（0.22.16）与 `dist/Hermes-Desktop-fnOS-v0.22.17-fd267bb3.fpk`（0.22.17 真机修复）
 - 早期测试：`/tmp/hermes-build/hermes-desktop.fpk`（0.22.6，已安装到 e5）
 - 日志：`/tmp/official-build-0.22.16.log`、`/tmp/hermes-tests.log`、`/tmp/hermes-desktop-uninstall.log`、
   `/vol1/@appdata/hermes-desktop/{info.log,logs/gateway.log,gateway-adapter.log}`

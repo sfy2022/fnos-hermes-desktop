@@ -179,6 +179,8 @@ status() {
 # etc / var 布局自愈：配置只放 etc，var 里用符号链接指回去（contract §3.2）。
 ensure_home_layout() {
     mkdir -p "${DATA_DIR}" "${ETC_DIR}" 2>/dev/null || true
+    # 与 fnOS 其它应用一致；700 会让应用中心的“应用数据”入口看不到目录内容。
+    chmod 770 "${DATA_DIR}" 2>/dev/null || true
 
     # 旧布局迁移：var/config.yaml → etc/config.yaml，var 留符号链接。
     if [ -f "${DATA_DIR}/config.yaml" ] && [ ! -L "${DATA_DIR}/config.yaml" ]; then
@@ -251,13 +253,16 @@ EOF
 finalize_webapp_auth() {
     local cfg="${CONFIG_FILE}"
     [ -f "${cfg}" ] || return 0
-    local cur_host
+    local cur_host has_valid_hash=0
     cur_host="$(sed -n 's/^[[:space:]]*host:[[:space:]]*//p' "${cfg}" 2>/dev/null \
         | head -n 1 | tr -d '"[:space:]')"
-    if [ "${cur_host}" != "127.0.0.1" ] && [ "${cur_host}" != "localhost" ]; then
+    grep -qE '^[[:space:]]*password_hash:[[:space:]]*"?scrypt\$' "${cfg}" 2>/dev/null \
+        && has_valid_hash=1
+
+    if [ "${cur_host}" != "127.0.0.1" ] && [ "${cur_host}" != "localhost" ] \
+            && [ "${has_valid_hash}" = "1" ]; then
         return 0
     fi
-    grep -qE '^[[:space:]]*basic_auth:' "${cfg}" 2>/dev/null && return 0
     [ -f "${ACCESS_INFO}" ] || return 0
     [ -x "${VENV_DIR}/bin/python3" ] || return 0
 
@@ -266,6 +271,12 @@ finalize_webapp_auth() {
     user="$(sed -n 's/^用户名:[[:space:]]*//p' "${ACCESS_INFO}" 2>/dev/null | head -n 1)"
     [ -n "${pass}" ] || return 0
     [ -n "${user}" ] || user="admin"
+
+    if [ "${has_valid_hash}" = "1" ]; then
+        sed -i "s/^[[:space:]]*host:[[:space:]]*.*/  host: 0.0.0.0/" "${cfg}" 2>/dev/null || true
+        log_msg "已有有效密码哈希，webapp 恢复绑定 0.0.0.0"
+        return 0
+    fi
 
     hash="$(HERMES_PW="${pass}" \
         env HOME="${TRIM_PKGHOME:-${DATA_DIR}}" \
@@ -280,7 +291,15 @@ finalize_webapp_auth() {
     fi
 
     sed -i "s/^[[:space:]]*host:[[:space:]]*.*/  host: 0.0.0.0/" "${cfg}" 2>/dev/null || true
-    cat >> "${cfg}" <<EOF
+    if grep -qE '^[[:space:]]*basic_auth:' "${cfg}" 2>/dev/null; then
+        if grep -qE '^[[:space:]]*password_hash:' "${cfg}" 2>/dev/null; then
+            sed -i "s|^\([[:space:]]*password_hash:\).*|\1 \"${hash}\"|" "${cfg}" 2>/dev/null || true
+        else
+            sed -i "/^[[:space:]]*basic_auth:/a\\    password_hash: \"${hash}\"" "${cfg}" 2>/dev/null || true
+        fi
+        log_msg "已补全空的 dashboard.basic_auth 哈希"
+    else
+        cat >> "${cfg}" <<EOF
 
 # 认证提供方（运行期补写；绑 0.0.0.0 时必需）
 dashboard:
@@ -288,8 +307,10 @@ dashboard:
     username: ${user}
     password_hash: "${hash}"
 EOF
+        log_msg "已补写 dashboard.basic_auth"
+    fi
     chmod 600 "${cfg}" 2>/dev/null || true
-    log_msg "已补写 dashboard.basic_auth，webapp 恢复绑定 0.0.0.0"
+    log_msg "webapp 恢复绑定 0.0.0.0"
 }
 
 SKILL_DIR="${DATA_DIR}/skills/fnos-trim"

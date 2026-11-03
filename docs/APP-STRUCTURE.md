@@ -264,7 +264,7 @@ socket_name=app.sock
 | 15 | 检查脚本 | `check_fpk_layout.py` + `check_gateway_contract.py` | ✅ 均已交付；模板/组装模式均 exit 0 |
 | 16 | `build.sh` 门禁 | `py_compile` + 两道 `run_gate` | ✅ 已加，当前树可过 |
 | 17 | 包根整洁 | 仅白名单条目 | ✅ 合规 |
-| 18 | 单测 | `tests/` 可跑 | ✅ 71 项（Windows 12 个 AF_UNIX skip；e5 全量 OK） |
+| 18 | 单测 | `tests/` 可跑 | ✅ 72 项（Windows 12 个 AF_UNIX skip；e5 全量 OK） |
 
 ### 6.2 剩余迁移步骤（在 e5 上执行，命令可复制）
 

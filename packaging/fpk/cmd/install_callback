@@ -60,6 +60,8 @@ gen_password() {
 # var/config.yaml 是指向 etc/config.yaml 的符号链接（fnOS 的 var/etc 不在同一父目录，必须用绝对目标）。
 prepare_layout() {
     mkdir -p "${DATA_DIR}" "${ETC_DIR}" 2>/dev/null || true
+    # fnOS 其它应用的数据目录是 770；700 会让应用中心的“应用数据”/管理端看不到内容。
+    chmod 770 "${DATA_DIR}" 2>/dev/null || true
 
     # 旧布局迁移：config.yaml 从 var 移到 etc，var 留符号链接。
     if [ -f "${DATA_DIR}/config.yaml" ] && [ ! -L "${DATA_DIR}/config.yaml" ]; then
@@ -161,12 +163,21 @@ webapp:
   host: ${bind_host}
   port: ${SERVICE_PORT}
   public_url: ""
+EOF
+        # 哈希生成失败时不要写空的 password_hash —— 否则后续 finalize 只检查
+        # “有没有 basic_auth”，会把空认证当成已配置而跳过，最终 webapp 停在
+        # 127.0.0.1 + 空认证，浏览器只看到 “Sign in to Hermes / Run hermes webapp”。
+        if [ -n "${pw_hash}" ]; then
+            cat >> "${cfg}" <<EOF
 
 # 认证提供方（Hermes 要求 password_hash，不是明文密码）
 dashboard:
   basic_auth:
     username: ${user}
     password_hash: "${pw_hash}"
+EOF
+        fi
+        cat >> "${cfg}" <<EOF
 
 # 启用内置插件：fnOS 授权面板 + fnos_auth_* 工具
 plugins:
@@ -745,13 +756,15 @@ verify_fnos_skill() {
 finalize_webapp_auth() {
     local cfg="${CONFIG_FILE}"
     [ -f "${cfg}" ] || return 0
-    local cur_host
+    local cur_host has_valid_hash=0
     cur_host="$(sed -n 's/^[[:space:]]*host:[[:space:]]*//p' "${cfg}" 2>/dev/null \
         | head -n 1 | tr -d '"[:space:]')"
-    if [ "${cur_host}" != "127.0.0.1" ] && [ "${cur_host}" != "localhost" ]; then
-        return 0
-    fi
-    if grep -qE '^[[:space:]]*basic_auth:' "${cfg}" 2>/dev/null; then
+    grep -qE '^[[:space:]]*password_hash:[[:space:]]*"?scrypt\$' "${cfg}" 2>/dev/null \
+        && has_valid_hash=1
+
+    # 已经是 0.0.0.0 + 有效哈希：无需处理。
+    if [ "${cur_host}" != "127.0.0.1" ] && [ "${cur_host}" != "localhost" ] \
+            && [ "${has_valid_hash}" = "1" ]; then
         return 0
     fi
 
@@ -760,6 +773,13 @@ finalize_webapp_auth() {
         pass="$(sed -n 's/^密码:[[:space:]]*//p' "${ACCESS_INFO}" 2>/dev/null | head -n 1)"
     fi
     [ -n "${pass}" ] || { log_msg "未拿到向导密码，保持 host=127.0.0.1"; return 0; }
+
+    if [ "${has_valid_hash}" = "1" ]; then
+        # 哈希已存在，只是绑定被回退：直接恢复 0.0.0.0。
+        sed -i "s/^[[:space:]]*host:[[:space:]]*.*/  host: 0.0.0.0/" "${cfg}" 2>/dev/null || true
+        log_msg "已有有效密码哈希，webapp 恢复绑定 0.0.0.0"
+        return 0
+    fi
 
     local hash=""
     if [ -x "${VENV_DIR}/bin/python3" ]; then
@@ -777,7 +797,16 @@ finalize_webapp_auth() {
     fi
 
     sed -i "s/^[[:space:]]*host:[[:space:]]*.*/  host: 0.0.0.0/" "${cfg}" 2>/dev/null || true
-    cat >> "${cfg}" <<EOF
+    if grep -qE '^[[:space:]]*basic_auth:' "${cfg}" 2>/dev/null; then
+        # 首装可能已经写了空 password_hash；就地补全，避免追加重复 dashboard 段。
+        if grep -qE '^[[:space:]]*password_hash:' "${cfg}" 2>/dev/null; then
+            sed -i "s|^\([[:space:]]*password_hash:\).*|\1 \"${hash}\"|" "${cfg}" 2>/dev/null || true
+        else
+            sed -i "/^[[:space:]]*basic_auth:/a\\    password_hash: \"${hash}\"" "${cfg}" 2>/dev/null || true
+        fi
+        log_msg "已补全空的 dashboard.basic_auth 哈希"
+    else
+        cat >> "${cfg}" <<EOF
 
 # 认证提供方（依赖装好后补写；绑 0.0.0.0 时必需）
 dashboard:
@@ -785,8 +814,10 @@ dashboard:
     username: ${wizard_web_user:-admin}
     password_hash: "${hash}"
 EOF
+        log_msg "已补写 dashboard.basic_auth"
+    fi
     chmod 600 "${cfg}" 2>/dev/null || true
-    log_msg "已补写 dashboard.basic_auth，webapp 恢复绑定 0.0.0.0（局域网可访问）"
+    log_msg "webapp 恢复绑定 0.0.0.0（局域网可访问）"
 }
 
 # ── 主流程 ──────────────────────────────────────────────────────────────

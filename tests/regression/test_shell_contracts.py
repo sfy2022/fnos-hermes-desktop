@@ -63,6 +63,19 @@ class ShellContractTests(unittest.TestCase):
             install_hermes_at,
         )
 
+    def test_empty_password_hash_is_repaired(self) -> None:
+        """An empty dashboard.basic_auth must not be treated as configured."""
+        for name in ("install_callback", "main"):
+            text = read(name)
+            self.assertIn('password_hash:[[:space:]]*"?scrypt', text, name)
+            self.assertIn("password_hash:", text, name)
+            self.assertIn("已补全空的 dashboard.basic_auth 哈希", text, name)
+        install = read("install_callback")
+        self.assertIn('if [ -n "${pw_hash}" ]; then', install)
+        main = read("main")
+        self.assertIn("chmod 770 \"${DATA_DIR}\"", main)
+        self.assertIn("chmod 770 \"${DATA_DIR}\"", install)
+
     def test_libs_script_relocated(self) -> None:
         install = read("install_callback")
         self.assertIn("runtime/lib/libs.sh", install)
