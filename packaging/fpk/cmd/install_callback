@@ -246,7 +246,9 @@ Hermes Desktop（飞牛版）访问信息
 密码:     ${pass}
 
 说明：
-- 飞牛桌面上的「Hermes Desktop」图标点击后会在浏览器打开上面的地址。
+- 桌面上的「Hermes」图标是内嵌入口（经飞牛统一网关），点击即可打开。
+- 浏览器直连地址：http://<本机IP>:${SERVICE_PORT}（不占桌面图标）。
+- 模型在安装向导中配置；也可登录后在 Hermes 设置里修改。
 - 上游对非回环绑定强制启用认证（防止局域网内未授权访问），
   因此需要输入上面这组账号密码。
 - 密码可通过编辑 ${cfg} 中的 dashboard.basic_auth 修改，改后需重启应用。
@@ -257,6 +259,39 @@ EOF
     # 导出给后续步骤使用
     HERMES_WEB_USER="${user}"
     HERMES_WEB_PASS="${pass}"
+}
+
+# ── 模型配置（安装向导） ────────────────────────────────────────────────
+# 在 venv 建好之前写 config.yaml / .env；只使用系统 python3（stdlib）。
+# 向导未提供 key 或留空 provider 时跳过，不阻塞安装；密钥只写 0600 文件，不写日志。
+apply_model_config() {
+    local provider="${wizard_model_provider:-skip}"
+    if [ "${provider}" = "skip" ] || [ -z "${provider}" ]; then
+        log_msg "模型配置：向导选择稍后配置，跳过"
+        return 0
+    fi
+
+    local helper="${TRIM_APPDEST}/cmd/apply_model_config.py"
+    if [ ! -f "${helper}" ]; then
+        log_msg "警告：缺少 ${helper}，模型配置跳过"
+        return 0
+    fi
+    if grep -qE '^[[:space:]]*model[[:space:]]*:' "${CONFIG_FILE}" 2>/dev/null; then
+        log_msg "模型配置：config.yaml 已有 model 段，保留原配置"
+        return 0
+    fi
+
+    local out
+    out="$(HERMES_MODEL_PROVIDER="${provider}" \
+        HERMES_MODEL_API_KEY="${wizard_model_api_key:-}" \
+        HERMES_MODEL_NAME="${wizard_model_name:-}" \
+        HERMES_MODEL_BASE_URL="${wizard_model_base_url:-}" \
+        python3 "${helper}" "${CONFIG_FILE}" "${DATA_DIR}/.env" 2>&1)" || {
+        log_msg "模型配置未写入：$(printf '%s' "${out}" | tail -n 1)"
+        return 0
+    }
+    chmod 600 "${CONFIG_FILE}" "${DATA_DIR}/.env" 2>/dev/null || true
+    log_msg "模型配置已写入（provider=${provider}，密钥不落日志）"
 }
 
 # ── 安装 uv ───────────────────────────────────────────────────────────────
@@ -764,6 +799,7 @@ prepare_layout
 verify_webapp || exit 1
 # 端口固定使用 manifest.service_port（不换端口：桌面入口与适配层都按它配置）
 apply_wizard_settings || exit 1
+apply_model_config || true
 ensure_uv || exit 1
 fetch_source || exit 1
 install_hermes || exit 1

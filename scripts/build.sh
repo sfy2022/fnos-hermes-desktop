@@ -247,14 +247,14 @@ if [ -f "${FPK_DIR}/manifest" ]; then
   APP_VERSION="${APP_VERSION:-${HERMES_VERSION}}"
   HERMES_VERSION="${APP_VERSION}"
   sed -i.bak "s|^version[[:space:]]*=.*|version               = ${APP_VERSION}|" "${FPK_DIR}/manifest"
-  sed -i.bak "s|^desc[[:space:]]*=.*|desc                  = Hermes 官方 Desktop 工作区的飞牛原生版。保留完整 Desktop 体验：对话流式输出、工具调用可视化、并排预览、文件浏览、Artifacts、定时任务、多 Profile、技能管理、终端栏、Git 审阅。基于官方 Webapp 形态（gateway 内建渲染层），无需 Electron，浏览器内即原生体验。上游 commit ${UPSTREAM_SHA}。|" "${FPK_DIR}/manifest"
+  sed -i.bak "s|^desc[[:space:]]*=.*|desc                  = Hermes 官方 Desktop 工作区的飞牛原生版。桌面唯一入口 Hermes（飞牛网关内嵌）；直连请访问 http://<NAS_IP>:9120。保留完整 Desktop 体验：流式对话、工具调用可视化、并排预览、文件浏览、Artifacts、定时任务、多 Profile、技能管理、终端栏、Git 审阅。安装向导可直接配置模型。上游 commit ${UPSTREAM_SHA}。|" "${FPK_DIR}/manifest"
   rm -f "${FPK_DIR}/manifest.bak"
 fi
 
 # ── 3.5 打包前门禁 ──────────────────────────────────────────────────────
 # 1) 随包分发的 Python 运行时脚本必须语法正确：
 #    adapter（薄网关适配层）与 pause_gateway（卸载/升级期优雅停机辅助）。
-for py_rel in "app/runtime/gateway/gateway_adapter.py" "cmd/pause_gateway.py"; do
+for py_rel in "app/runtime/gateway/gateway_adapter.py" "cmd/pause_gateway.py" "cmd/apply_model_config.py"; do
     py_file="${FPK_DIR}/${py_rel}"
     [ -f "${py_file}" ] || die "缺少运行时脚本：${py_file}"
     PYTHONPYCACHEPREFIX=/tmp/.build-pycache python3 -m py_compile "${py_file}" \

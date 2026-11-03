@@ -69,7 +69,7 @@ CMD_SCRIPTS = (
     "config_callback",
 )
 CMD_BANNED = ("gateway_proxy.py", "fnos_bridge.py")
-CMD_ALLOWED_EXTRA = ("pause_gateway.py",)
+CMD_ALLOWED_EXTRA = ("pause_gateway.py", "apply_model_config.py")
 
 WIZARD_FILES = ("install", "config", "upgrade", "uninstall")
 WIZARD_ITEM_TYPES = (

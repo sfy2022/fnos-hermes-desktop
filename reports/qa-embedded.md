@@ -17,8 +17,8 @@
 
 | 项 | 命令 | 结果 |
 |---|---|---|
-| 单元/集成测试（Windows） | `python -m unittest discover -s tests` | 59 tests OK（12 个 AF_UNIX 用例 skip） |
-| 单元/集成测试（e5 Linux） | `python3 -m unittest discover -s tests` | **59 tests OK（全量，含 AF_UNIX/WS）** |
+| 单元/集成测试（Windows） | `python -m unittest discover -s tests` | 70 tests OK（12 个 AF_UNIX 用例 skip） |
+| 单元/集成测试（e5 Linux） | `python3 -m unittest discover -s tests` | **70 tests OK（全量，含 AF_UNIX/WS）** |
 | 布局检查（源码/模板） | `python3 scripts/check_fpk_layout.py packaging/fpk --template` | exit 0，违规 0；警告：缺 `app/webapp`（构建注入）、含 arm64 二进制 |
 | 网关契约 | `python3 scripts/check_gateway_contract.py packaging/fpk` | exit 0，违规/警告 0 |
 | Shell 语法（e5） | `bash -n` 全部 cmd/runtime/scripts | 通过 |
@@ -53,18 +53,27 @@
 
 | 项 | 值 |
 |---|---|
-| 版本 | **0.22.15** |
+| 版本 | **0.22.16** |
 | 上游 | `NousResearch/hermes-agent@fd267bb3`（main） |
-| 产物 | `dist/Hermes-Desktop-fnOS-v0.22.15-fd267bb3.fpk` |
-| 大小 | 22,654,628 字节 |
-| SHA256 | `5cf60cfbddc1a7f812767a625a37dde903e838c21bafc76a90a7a81ea33c6f8b` |
+| 产物 | `dist/Hermes-Desktop-fnOS-v0.22.16-fd267bb3.fpk` |
+| 大小 | 22,650,933 字节 |
+| SHA256 | `d91db7376e6250f6dcf275a4be6853a75b02c2ca4f6153d4efd76770157a28fd` |
 | 构建时门禁 | 布局检查 / 网关契约 / py_compile 均通过（build.sh §3.5） |
 | build-info | `/dist/build-info.json`（`bundle_files: 1079`） |
 
 分支 `.upstream-sha` 已更新为 `fd267bb3242a14c33d4899cffc60ee4be816f14d`。
-工作区已回传产物：`hermes-src/dist/Hermes-Desktop-fnOS-v0.22.15-fd267bb3.fpk`。
+工作区已回传产物：`hermes-src/dist/Hermes-Desktop-fnOS-v0.22.16-fd267bb3.fpk`。
 
-> 0.22.15 产品化变更：
+> 0.22.16 安装向导重做：
+> - 三步：访问账号 → **模型配置** → 网络配置；模型步骤可选
+>   OpenRouter / Anthropic / DeepSeek / 自定义 OpenAI 兼容 / 稍后配置。
+> - 新增 `cmd/apply_model_config.py`：在 venv 创建前用系统 python3 写
+>   `etc/config.yaml` 的 `model` 段与 `var/.env` 的 provider key；
+>   内置 provider 的 key 只进 `.env`，`custom`/`deepseek` 的 `api_key` 进 config；
+>   两文件 0600，key 不落日志。带 6 个单测（openrouter/anthropic/deepseek/custom/skip/已有配置）。
+> - `build.sh` 注入的 `manifest.desc` 同步写明「唯一入口 Hermes；直连 http://<NAS_IP>:9120」。
+>
+> 0.22.15 产品化变更（已包含）：
 > - 桌面**只保留一个内嵌入口**，名称 `Hermes`；删除直连 `type=url` 图标，
 >   `desktop_applaunchname=hermes-desktop.Embedded`；端口 `9120` 写进 `manifest.desc` 提示。
 > - 图标换为**官方 Hermes 图标**（`apps/desktop/assets/icon-dark.png` 生成的
@@ -133,21 +142,21 @@
 ### 5.2 未执行/未验证
 
 - `appcenter-cli install-fpk` 对已安装应用提示“请从 Web UI 卸载”，**升级路径未执行**；
-  0.22.15 安装包已构建并通过布局/契约门禁，待 UI 或干净设备验证。
+  0.22.16 安装包已构建并通过布局/契约门禁，待 UI 或干净设备验证。
   真机测试使用 0.22.6 包 + 手工修正符号链接，因此 §5.1 的修复在真机上是“修复后行为已验证、
   修复代码本身待下次全新安装验证”。
 - 浏览器 iframe 实际渲染、fnOS 桌面内嵌窗口未执行（e5 无浏览器；网关需飞牛登录态）。
   用户反馈 0.22.6 测试包内嵌可登录、刷新白屏，已据此修复并构建 0.22.14/0.22.15。
-- 0.22.15 的“单入口 + 官方图标 + 卸载删除”已做静态/包内容检查，待用户安装后验收。
+- 0.22.16 的“模型向导 + 单入口 + 官方图标 + 卸载删除”已做静态/包内容检查，待用户安装后验收。
 
 ## 6. 证据与产物
 
 - 分支：`refactor/embedded-gateway`（已推送，HEAD 见 GitHub）
 - CI：`.github/workflows/test.yml` 在分支上连续通过
   （例：run `41666246054`、`41666044281`、`41664090763`、`41662809087`、`41658183003`、`41657585799`）
-- 官方构建：`dist/Hermes-Desktop-fnOS-v0.22.15-fd267bb3.fpk`（0.22.15 / 上游 fd267bb3）
+- 官方构建：`dist/Hermes-Desktop-fnOS-v0.22.16-fd267bb3.fpk`（0.22.16 / 上游 fd267bb3）
 - 早期测试：`/tmp/hermes-build/hermes-desktop.fpk`（0.22.6，已安装到 e5）
-- 日志：`/tmp/official-build-0.22.15.log`、`/tmp/hermes-tests.log`、`/tmp/hermes-desktop-uninstall.log`、
+- 日志：`/tmp/official-build-0.22.16.log`、`/tmp/hermes-tests.log`、`/tmp/hermes-desktop-uninstall.log`、
   `/vol1/@appdata/hermes-desktop/{info.log,logs/gateway.log,gateway-adapter.log}`
 
 ### 6.1 PR 创建状态

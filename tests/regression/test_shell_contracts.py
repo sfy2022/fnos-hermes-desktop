@@ -86,6 +86,35 @@ class ShellContractTests(unittest.TestCase):
         self.assertEqual(entries["hermes-desktop.Embedded"]["title"], "Hermes")
         self.assertNotIn("Application", entries)
 
+    def test_install_wizard_configures_model(self) -> None:
+        import json
+
+        wizard = json.loads(
+            (REPO / "packaging" / "fpk" / "wizard" / "install").read_text(encoding="utf-8")
+        )
+        fields = {
+            item.get("field")
+            for step in wizard
+            for item in step.get("items", [])
+            if item.get("field")
+        }
+        self.assertTrue(
+            {"wizard_model_provider", "wizard_model_api_key", "wizard_model_name",
+             "wizard_model_base_url"} <= fields
+        )
+        provider = next(
+            item for step in wizard for item in step.get("items", [])
+            if item.get("field") == "wizard_model_provider"
+        )
+        values = {opt["value"] for opt in provider["options"]}
+        self.assertTrue({"openrouter", "anthropic", "deepseek", "custom", "skip"} <= values)
+
+    def test_install_callback_applies_model_config(self) -> None:
+        install = read("install_callback")
+        self.assertIn("apply_model_config", install)
+        self.assertIn("cmd/apply_model_config.py", install)
+        self.assertIn("apply_model_config || true", install)
+
 
 class GatewayConfigContractTests(unittest.TestCase):
     def test_ui_and_conf_agree(self) -> None:

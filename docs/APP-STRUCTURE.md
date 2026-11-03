@@ -159,9 +159,13 @@ packaging/fpk/
 
 ### 4.5 `wizard/`
 
-- 四个文件均为 **JSON 数组**，字段用 `wizard_*`（如 `wizard_web_user`、`wizard_web_pass`、`wizard_github_proxy`、`wizard_pypi_index`）。
+- 四个文件均为 **JSON 数组**，字段用 `wizard_*`（如 `wizard_web_user`、`wizard_web_pass`、`wizard_model_provider`、`wizard_model_api_key`、`wizard_model_name`、`wizard_model_base_url`、`wizard_github_proxy`、`wizard_pypi_index`）。
 - 禁止自定义 `TRIM_` 前缀字段；`password` 类型字段的值不得写入日志或报告。
-- 当前 `install`（访问账号 + 网络配置）、`config`（说明页）、`upgrade`、`uninstall` 均存在，结构合规。
+- 当前 `install` 三个步骤：访问账号 → 模型配置（OpenRouter/Anthropic/DeepSeek/自定义/跳过）→ 网络配置；
+  `config`（说明页）、`upgrade`、`uninstall` 均存在，结构合规。
+- 模型配置由 `cmd/apply_model_config.py` 在 venv 创建前用系统 python3 写入：
+  `etc/config.yaml` 的 `model` 段 + `var/.env` 的 provider key；内置 provider 的 key 只写 `.env`，
+  `custom`/`deepseek` 的 `api_key` 写 config；两文件均 0600，key 不落日志。
 
 ### 4.6 `app/ui/config`（单入口：桌面内嵌）
 
@@ -260,7 +264,7 @@ socket_name=app.sock
 | 15 | 检查脚本 | `check_fpk_layout.py` + `check_gateway_contract.py` | ✅ 均已交付；模板/组装模式均 exit 0 |
 | 16 | `build.sh` 门禁 | `py_compile` + 两道 `run_gate` | ✅ 已加，当前树可过 |
 | 17 | 包根整洁 | 仅白名单条目 | ✅ 合规 |
-| 18 | 单测 | `tests/` 可跑 | ✅ 59 项（Windows 12 个 AF_UNIX skip；e5 全量 OK） |
+| 18 | 单测 | `tests/` 可跑 | ✅ 70 项（Windows 12 个 AF_UNIX skip；e5 全量 OK） |
 
 ### 6.2 剩余迁移步骤（在 e5 上执行，命令可复制）
 
