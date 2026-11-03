@@ -8,6 +8,11 @@
 #   若要提供"完全删除"选项，需在 wizard/uninstall 里让用户选择，
 #   再在 cmd/uninstall_callback 中自行清理 —— 本脚本就是干这个的。
 #
+# 目录约定（REFACTOR-CONTRACT §3.2）：
+#   etc/ 配置（config.yaml、access-info.txt、gateway.conf）
+#   var/ 运行数据（HERMES_HOME）
+#   home/ HOME=TRIM_PKGHOME（.config/trim-cli 等）
+#
 # 关键点：
 #   1) 用户可能选了「删除数据」，此时 TRIM_PKGVAR 已被 fnOS 删掉，
 #      不能假定数据目录存在，也不能往不存在的目录写日志。
@@ -21,6 +26,10 @@
 LOG_DIR="${TRIM_PKGVAR}"
 LOG_FILE="${LOG_DIR}/info.log"
 PID_FILE="${LOG_DIR}/app.pid"
+ETC_DIR="${TRIM_PKGETC:-$(dirname "${LOG_DIR}")/etc}"
+ADAPTER_PID_FILE="${LOG_DIR}/gateway-adapter.pid"
+ADAPTER="${TRIM_APPDEST}/runtime/gateway/gateway_adapter.py"
+GATEWAY_SOCKET="${TRIM_APPDEST}/app.sock"
 
 # 向导里用户的选择："true" 表示清除数据
 DELETE_DATA="${wizard_delete_data:-false}"
@@ -32,14 +41,50 @@ log_msg() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - [uninstall_callback] $1" >> "${LOG_FILE}" 2>/dev/null || true
 }
 
+# 从 gateway.conf 解析 socket 名（单一来源；缺失时退回 app.sock）
+load_gateway_socket() {
+    local conf="${TRIM_APPDEST}/runtime/gateway/gateway.conf"
+    local key value socket_name=""
+    if [ -f "${conf}" ]; then
+        while IFS='=' read -r key value || [ -n "${key}" ]; do
+            if [ "${key}" = "socket_name" ]; then
+                socket_name="$(printf '%s' "${value}" | tr -d '[:space:]')"
+            fi
+        done < "${conf}"
+    fi
+    [ -n "${socket_name}" ] || socket_name="app.sock"
+    GATEWAY_SOCKET="${TRIM_APPDEST}/${socket_name}"
+}
+
+stop_gateway_adapter() {
+    local gpid=""
+    if [ -f "${ADAPTER_PID_FILE}" ]; then
+        gpid="$(head -n 1 "${ADAPTER_PID_FILE}" 2>/dev/null | tr -d '[:space:]')"
+        if [ -n "${gpid}" ] && kill -0 "${gpid}" 2>/dev/null; then
+            kill -TERM "${gpid}" 2>/dev/null || true
+            sleep 1
+            kill -KILL "${gpid}" 2>/dev/null || true
+        fi
+        rm -f "${ADAPTER_PID_FILE}" 2>/dev/null || true
+    fi
+    pkill -TERM -f "${ADAPTER}" 2>/dev/null || true
+    sleep 1
+    pkill -KILL -f "${ADAPTER}" 2>/dev/null || true
+    rm -f "${GATEWAY_SOCKET}" 2>/dev/null || true
+}
+
 stop_app_processes() {
     # 0) 优先走 gateway 官方控制接口优雅停机（详见 uninstall_init 的说明）
+    load_gateway_socket
     if [ -f "$(dirname "$0")/pause_gateway.py" ]; then
         python3 "$(dirname "$0")/pause_gateway.py" "${TRIM_PKGVAR}" 2>/dev/null || true
         sleep 2
     fi
 
-    # 1) PID 文件精确终止（文件可能已随数据目录删除）
+    # 1) 先停网关适配层（target/app.sock）
+    stop_gateway_adapter
+
+    # 2) PID 文件精确终止（文件可能已随数据目录删除）
     if [ -f "${PID_FILE}" ]; then
         local pid
         pid="$(head -n 1 "${PID_FILE}" 2>/dev/null | tr -d '[:space:]')"
@@ -55,22 +100,17 @@ stop_app_processes() {
         rm -f "${PID_FILE}" 2>/dev/null || true
     fi
 
-    # 2) 兜底：按本应用路径匹配
+    # 3) 兜底：按本应用路径匹配
     pkill -TERM -f "${TRIM_PKGVAR}/venv/bin" 2>/dev/null || true
     pkill -TERM -f "${TRIM_PKGVAR}.*gateway" 2>/dev/null || true
     sleep 2
     pkill -KILL -f "${TRIM_PKGVAR}/venv/bin" 2>/dev/null || true
     pkill -KILL -f "${TRIM_PKGVAR}.*gateway" 2>/dev/null || true
-
 }
 
-# 把要删的数据先归档一份到存储卷根目录。
+# 把要删的数据先归档一份到存储卷根目录（etc + var + home）。
 # fnOS 卸载会删掉应用目录，归档是用户唯一的找回途径。
 archive_data() {
-    local src="${TRIM_PKGVAR}"
-    [ -d "${src}" ] || return 0
-
-    # 存储卷根目录：与 TRIM_APPDEST 同卷的上一级
     local vol_root
     vol_root="$(dirname "$(dirname "${TRIM_APPDEST}")")"
     [ -d "${vol_root}" ] || vol_root="/vol1"
@@ -83,29 +123,48 @@ archive_data() {
     # 只归档真正需要留存的部分：配置、会话、记忆、技能授权。
     # 不归档源码与 Python 环境（可重新下载），否则备份会有 1GB 以上。
     mkdir -p "${dest}" 2>/dev/null || return 0
+
+    # 配置（etc）
+    if [ -d "${ETC_DIR}" ]; then
+        mkdir -p "${dest}/etc" 2>/dev/null || true
+        local etc_item
+        for etc_item in config.yaml access-info.txt gateway.conf; do
+            [ -e "${ETC_DIR}/${etc_item}" ] && cp -r "${ETC_DIR}/${etc_item}" "${dest}/etc/" 2>/dev/null || true
+        done
+    fi
+
+    # 运行数据（var）
+    local item
     for item in config.yaml access-info.txt fnos-skill-setup.txt state sessions \
                 backups channel_directory.json gateway_state.json; do
-        [ -e "${src}/${item}" ] && cp -r "${src}/${item}" "${dest}/" 2>/dev/null || true
+        [ -e "${TRIM_PKGVAR}/${item}" ] && cp -r "${TRIM_PKGVAR}/${item}" "${dest}/" 2>/dev/null || true
     done
     # 技能授权令牌（trim-cli 的 OAuth 凭据）
-    [ -d "${src}/.config" ] && cp -r "${src}/.config" "${dest}/" 2>/dev/null || true
+    [ -d "${TRIM_PKGVAR}/.config" ] && cp -r "${TRIM_PKGVAR}/.config" "${dest}/" 2>/dev/null || true
+
+    # home（TRIM_PKGHOME）
     [ -d "${TRIM_PKGHOME}/.config" ] && cp -r "${TRIM_PKGHOME}/.config" "${dest}/home-config" 2>/dev/null || true
 
     echo "${dest}"
 }
 
 delete_data() {
-    local src="${TRIM_PKGVAR}"
-    [ -d "${src}" ] || return 0
-
     local backup
     backup="$(archive_data)"
     log_msg "数据归档完成：${backup:-（未能归档）}"
 
-    # 删除数据目录本体
-    rm -rf "${src}" 2>/dev/null || true
+    # 删除运行数据目录本体（fnOS 只保留 var，需要应用自己删）
+    if [ -d "${TRIM_PKGVAR}" ]; then
+        rm -rf "${TRIM_PKGVAR}" 2>/dev/null || true
+    fi
 
-    # 顺带清理与本应用相关的其它持久化位置
+    # etc 由 fnOS 卸载时删除；若仍存在则清掉敏感配置
+    if [ -d "${ETC_DIR}" ]; then
+        rm -f "${ETC_DIR}/config.yaml" "${ETC_DIR}/access-info.txt" \
+              "${ETC_DIR}/gateway.conf" 2>/dev/null || true
+    fi
+
+    # home 下的应用配置（trim-cli OAuth 凭据）
     rm -rf "${TRIM_PKGHOME}/.config/trim-cli" 2>/dev/null || true
 
     log_msg "已按用户选择清除应用数据"

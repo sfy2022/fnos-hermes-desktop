@@ -1,0 +1,783 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>fnOS 桌面内嵌模拟 · Hermes Desktop</title>
+  <style>
+    :root {
+      --bg: #0b1020;
+      --desktop: #101a33;
+      --desktop-2: #172445;
+      --panel: #0e1730;
+      --panel-2: #131f3d;
+      --border: #24345c;
+      --text: #e7eefc;
+      --text-soft: #a9b8d6;
+      --muted: #7c8bab;
+      --accent: #4f8cff;
+      --accent-2: #7c5cff;
+      --ok: #38d39f;
+      --warn: #f5b84c;
+      --err: #ff6b6b;
+      --radius: 12px;
+      --mono: "Cascadia Mono", "Consolas", "Liberation Mono", monospace;
+      --sans: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      height: 100%;
+      margin: 0;
+    }
+
+    body {
+      display: flex;
+      flex-direction: column;
+      background: radial-gradient(1200px 500px at 20% -10%, #1b2a52, transparent 60%), var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    /* ---- 顶部飞牛桌面栏 ---- */
+    .desktop-bar {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 8px 16px;
+      background: rgba(10, 16, 34, 0.92);
+      border-bottom: 1px solid var(--border);
+      flex: 0 0 auto;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .brand-mark {
+      display: inline-grid;
+      place-items: center;
+      width: 26px;
+      height: 26px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .brand-sub {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 400;
+    }
+
+    .fake-search {
+      flex: 1 1 auto;
+      max-width: 420px;
+      margin: 0 auto;
+      padding: 5px 12px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--muted);
+      font-size: 12.5px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .desktop-bar-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--text-soft);
+      font-size: 12.5px;
+    }
+
+    .clock {
+      font-family: var(--mono);
+      color: var(--text);
+    }
+
+    .avatar {
+      display: inline-grid;
+      place-items: center;
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      background: #2b3d6b;
+      color: var(--text);
+      font-size: 12px;
+    }
+
+    /* ---- 桌面主体 ---- */
+    .desktop {
+      flex: 1 1 auto;
+      min-height: 0;
+      display: flex;
+      gap: 14px;
+      padding: 14px 16px;
+    }
+
+    .dock {
+      flex: 0 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      width: 56px;
+    }
+
+    .dock-item {
+      display: grid;
+      place-items: center;
+      width: 52px;
+      height: 52px;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--panel);
+      color: var(--text-soft);
+      font-size: 11px;
+      text-align: center;
+    }
+
+    .dock-item.active {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px var(--accent) inset, 0 8px 20px rgba(79, 140, 255, 0.25);
+      color: var(--text);
+    }
+
+    /* ---- 窗口 ---- */
+    .window {
+      flex: 1 1 auto;
+      min-width: 0;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--panel);
+      overflow: hidden;
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+    }
+
+    .titlebar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 12px;
+      background: linear-gradient(180deg, #1a2749, #141f3c);
+      border-bottom: 1px solid var(--border);
+      flex: 0 0 auto;
+    }
+
+    .app-icon {
+      display: inline-grid;
+      place-items: center;
+      width: 24px;
+      height: 24px;
+      border-radius: 7px;
+      background: linear-gradient(135deg, #2e6bff, #7c5cff);
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .title {
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .title-sub {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .titlebar-spacer { flex: 1 1 auto; }
+
+    .dots {
+      display: flex;
+      gap: 6px;
+    }
+
+    .dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      background: #33446f;
+    }
+
+    .dot.red { background: #ff5f57; }
+    .dot.yellow { background: #febc2e; }
+    .dot.green { background: #28c840; }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      background: var(--panel-2);
+      border-bottom: 1px solid var(--border);
+      flex: 0 0 auto;
+    }
+
+    .toolbar label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--text-soft);
+      font-size: 12.5px;
+      flex: 1 1 420px;
+      min-width: 240px;
+    }
+
+    input[type="text"],
+    select {
+      min-width: 0;
+      padding: 5px 9px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #0b1428;
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 12.5px;
+      outline: none;
+    }
+
+    input[type="text"] { flex: 1 1 auto; }
+
+    input[type="text"]:focus,
+    select:focus { border-color: var(--accent); }
+
+    button {
+      padding: 5px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #1a2748;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 12.5px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    button:hover { border-color: var(--accent); }
+
+    button.primary {
+      border-color: transparent;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      color: #fff;
+      font-weight: 600;
+    }
+
+    .viewport-box {
+      flex: 1 1 auto;
+      min-height: 320px;
+      padding: 10px;
+      background:
+        linear-gradient(45deg, rgba(255, 255, 255, 0.02) 25%, transparent 25%, transparent 75%, rgba(255, 255, 255, 0.02) 75%) 0 0 / 18px 18px,
+        #0a1226;
+      display: flex;
+      justify-content: center;
+      align-items: stretch;
+      overflow: auto;
+    }
+
+    .viewport-box.viewport-tablet .frame { width: 768px; max-width: 100%; }
+    .viewport-box.viewport-phone .frame { width: 390px; max-width: 100%; }
+
+    .frame {
+      position: relative;
+      flex: 1 1 auto;
+      min-width: 0;
+      width: 100%;
+      min-height: 100%;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #fff;
+      overflow: hidden;
+      transition: width 0.18s ease;
+    }
+
+    iframe {
+      display: block;
+      width: 100%;
+      height: 100%;
+      border: 0;
+      background: #fff;
+    }
+
+    /* ---- 底部诊断区 ---- */
+    .diagnostics {
+      flex: 0 0 auto;
+      display: grid;
+      grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+      gap: 12px;
+      padding: 0 16px 16px;
+    }
+
+    .card {
+      min-width: 0;
+      padding: 12px 14px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--panel);
+    }
+
+    .card h2 {
+      margin: 0 0 10px;
+      font-size: 13px;
+      letter-spacing: 0.02em;
+      color: var(--text);
+    }
+
+    .card h2 .hint {
+      margin-left: 6px;
+      color: var(--muted);
+      font-size: 11.5px;
+      font-weight: 400;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin: 0;
+    }
+
+    .stat {
+      padding: 8px 10px;
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      background: var(--panel-2);
+    }
+
+    .stat dt {
+      color: var(--muted);
+      font-size: 11.5px;
+    }
+
+    .stat dd {
+      margin: 2px 0 0;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--text);
+      word-break: break-all;
+    }
+
+    .log {
+      height: 148px;
+      margin: 0;
+      padding: 8px 10px;
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      background: #080f20;
+      color: var(--text-soft);
+      font-family: var(--mono);
+      font-size: 11.5px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .log .log-line { display: block; }
+
+    .log .ok { color: var(--ok); }
+    .log .warn { color: var(--warn); }
+    .log .err { color: var(--err); }
+    .log .time { color: var(--muted); }
+
+    .ws-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .ws-row input { flex: 1 1 240px; }
+
+    .checklist {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--text-soft);
+      font-size: 12.5px;
+    }
+
+    .checklist li { margin: 4px 0; }
+    .checklist code {
+      padding: 1px 5px;
+      border-radius: 5px;
+      background: var(--panel-2);
+      font-family: var(--mono);
+      font-size: 11.5px;
+      color: var(--text);
+    }
+
+    .note {
+      margin: 10px 0 0;
+      padding: 8px 10px;
+      border-left: 3px solid var(--warn);
+      border-radius: 0 8px 8px 0;
+      background: rgba(245, 184, 76, 0.08);
+      color: var(--text-soft);
+      font-size: 12px;
+    }
+
+    .note strong { color: var(--warn); }
+
+    @media (max-width: 860px) {
+      .diagnostics { grid-template-columns: 1fr; }
+      .dock { display: none; }
+      .fake-search { display: none; }
+    }
+
+    @media (max-width: 560px) {
+      .desktop { padding: 10px; }
+      .title-sub { display: none; }
+      .stats { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header class="desktop-bar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">fn</span>
+      <span>飞牛 fnOS <span class="brand-sub">· 桌面内嵌模拟</span></span>
+    </div>
+    <div class="fake-search" aria-hidden="true">搜索应用、文件、设置…（模拟元素，无功能）</div>
+    <div class="desktop-bar-right">
+      <span class="clock" id="clock">--:--</span>
+      <span class="avatar" aria-hidden="true">A</span>
+    </div>
+  </header>
+
+  <main class="desktop">
+    <aside class="dock" aria-hidden="true">
+      <div class="dock-item active">Hermes</div>
+      <div class="dock-item">文件</div>
+      <div class="dock-item">应用</div>
+      <div class="dock-item">设置</div>
+    </aside>
+
+    <section class="window" aria-label="桌面窗口模拟">
+      <div class="titlebar">
+        <span class="app-icon" aria-hidden="true">H</span>
+        <span class="title">Hermes Desktop</span>
+        <span class="title-sub">桌面内嵌入口 · iframe 验收夹具</span>
+        <span class="titlebar-spacer"></span>
+        <span class="dots" aria-hidden="true">
+          <span class="dot red"></span>
+          <span class="dot yellow"></span>
+          <span class="dot green"></span>
+        </span>
+      </div>
+
+      <div class="toolbar">
+        <label for="url-input">
+          iframe 地址
+          <input id="url-input" type="text" spellcheck="false" autocomplete="off" value="/app/hermes-desktop">
+        </label>
+        <button id="reload-btn" class="primary" type="button">重新加载</button>
+        <select id="viewport-select" aria-label="模拟视口宽度">
+          <option value="desktop">桌面宽度</option>
+          <option value="tablet">平板 768px</option>
+          <option value="phone">手机 390px</option>
+        </select>
+        <button id="new-tab-btn" type="button">新标签页打开</button>
+      </div>
+
+      <div class="viewport-box" id="viewport-box">
+        <div class="frame">
+          <iframe id="app-frame" title="Hermes Desktop（内嵌）" src="about:blank"></iframe>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <section class="diagnostics" aria-label="验收诊断">
+    <div class="card">
+      <h2>状态 <span class="hint">由夹具自身事件驱动，非应用内状态</span></h2>
+      <dl class="stats">
+        <div class="stat">
+          <dt>目标地址</dt>
+          <dd id="stat-target">-</dd>
+        </div>
+        <div class="stat">
+          <dt>iframe load 事件</dt>
+          <dd id="stat-load">尚未触发</dd>
+        </div>
+        <div class="stat">
+          <dt>最近一次耗时</dt>
+          <dd id="stat-elapsed">-</dd>
+        </div>
+        <div class="stat">
+          <dt>同源判定（CSP 前提）</dt>
+          <dd id="stat-origin">-</dd>
+        </div>
+      </dl>
+      <h2 style="margin-top:12px;">事件日志</h2>
+      <pre class="log" id="event-log" aria-live="polite"></pre>
+    </div>
+
+    <div class="card">
+      <h2>人工验收清单 <span class="hint">按 docs/REFACTOR-CONTRACT.md §5</span></h2>
+      <ol class="checklist">
+        <li>DevTools → <b>Console</b>：<b>没有</b> CSP 拒绝，例如
+          <code>Refused to display … frame-ancestors</code>、<code>violates the following Content Security Policy</code>。</li>
+        <li>DevTools → <b>Network</b> → 过滤 <b>WS</b>：应用自身建立的 WebSocket 握手状态为
+          <code>101 Switching Protocols</code>（不是 403 / 502 / pending）。</li>
+        <li>iframe 内出现 Hermes Desktop 界面或登录页，而不是持续白屏；
+          白屏 + Console CSP 拒绝 = 适配层未把 <code>frame-ancestors 'none'</code> 放宽为 <code>'self'</code>。</li>
+        <li>事件日志出现 <code>iframe load</code>；若出现 <code>securitypolicyviolation</code>，
+          说明本页文档自身也被 CSP 限制（本页无 CSP，通常不会出现）。</li>
+      </ol>
+      <h2 style="margin-top:12px;">WebSocket 探测 <span class="hint">可选，仅当已知 WS 端点时使用</span></h2>
+      <div class="ws-row">
+        <input id="ws-input" type="text" spellcheck="false" autocomplete="off" placeholder="ws://127.0.0.1:8090/app/hermes-desktop/ws">
+        <button id="ws-connect-btn" type="button">连接</button>
+        <button id="ws-close-btn" type="button">关闭</button>
+      </div>
+      <p class="note">
+        <strong>同源提示：</strong>只有父页面与 iframe 地址同源时，本页的 CSP 判定才有意义。
+        直接用 <code>file://</code> 或另一个端口打开本页时，正确的
+        <code>frame-ancestors 'self'</code> 也会拒绝跨源父页面 —— 这属于预期行为，不是缺陷。
+        推荐用 <code>tests/browser/proxy.py</code> 做同源回放，或直接在真实飞牛桌面里验收。
+      </p>
+    </div>
+  </section>
+
+  <script>
+    (function () {
+      'use strict';
+
+      var DEFAULT_URL = '/app/hermes-desktop';
+      var params = new URLSearchParams(window.location.search);
+      var targetUrl = params.get('url') || DEFAULT_URL;
+      var wsParam = params.get('ws') || '';
+
+      var frame = document.getElementById('app-frame');
+      var urlInput = document.getElementById('url-input');
+      var viewportSelect = document.getElementById('viewport-select');
+      var viewportBox = document.getElementById('viewport-box');
+      var logEl = document.getElementById('event-log');
+      var statTarget = document.getElementById('stat-target');
+      var statLoad = document.getElementById('stat-load');
+      var statElapsed = document.getElementById('stat-elapsed');
+      var statOrigin = document.getElementById('stat-origin');
+      var wsInput = document.getElementById('ws-input');
+      var clockEl = document.getElementById('clock');
+
+      var loadStartedAt = 0;
+      var socket = null;
+
+      function stamp() {
+        var d = new Date();
+        function p(n) { return String(n).padStart(2, '0'); }
+        return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+      }
+
+      function log(message, level) {
+        var line = document.createElement('span');
+        line.className = 'log-line';
+        var time = document.createElement('span');
+        time.className = 'time';
+        time.textContent = '[' + stamp() + '] ';
+        var body = document.createElement('span');
+        body.className = level || '';
+        body.textContent = message;
+        line.appendChild(time);
+        line.appendChild(body);
+        logEl.appendChild(line);
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      function originOf(url) {
+        try {
+          return new URL(url, window.location.href).origin;
+        } catch (err) {
+          return null;
+        }
+      }
+
+      function updateOriginBadge(url) {
+        var target = originOf(url);
+        if (!target) {
+          statOrigin.textContent = '地址无效';
+          return;
+        }
+        if (target === window.location.origin) {
+          statOrigin.textContent = '同源 ✔';
+          statOrigin.style.color = '#38d39f';
+        } else {
+          statOrigin.textContent = '跨源 → 仅作布局参考';
+          statOrigin.style.color = '#f5b84c';
+        }
+      }
+
+      function setUrl(url, pushHistory) {
+        targetUrl = url || DEFAULT_URL;
+        urlInput.value = targetUrl;
+        statTarget.textContent = targetUrl;
+        updateOriginBadge(targetUrl);
+        if (pushHistory !== false) {
+          try {
+            var next = new URL(window.location.href);
+            next.searchParams.set('url', targetUrl);
+            window.history.replaceState(null, '', next.toString());
+          } catch (err) {
+            /* file:// 下 replaceState 可能被拒绝，忽略 */
+          }
+        }
+      }
+
+      function loadFrame() {
+        loadStartedAt = performance.now();
+        statLoad.textContent = '加载中…';
+        log('加载 iframe：' + targetUrl);
+        try {
+          frame.src = 'about:blank';
+          window.setTimeout(function () {
+            frame.src = targetUrl;
+          }, 30);
+        } catch (err) {
+          log('无法设置 iframe src：' + err.message, 'err');
+        }
+      }
+
+      frame.addEventListener('load', function () {
+        var currentSrc = frame.getAttribute('src') || '';
+        if (!loadStartedAt || !currentSrc || currentSrc === 'about:blank') {
+          return;
+        }
+        var elapsed = Math.round(performance.now() - loadStartedAt);
+        loadStartedAt = 0;
+        statLoad.textContent = '已触发（' + stamp() + '）';
+        statElapsed.textContent = elapsed + ' ms';
+        log('iframe load 事件触发，耗时 ' + elapsed + ' ms', 'ok');
+      });
+
+      document.addEventListener('securitypolicyviolation', function (event) {
+        log(
+          'securitypolicyviolation：' + event.violatedDirective +
+          '  blockedURI=' + (event.blockedURI || '-'),
+          'err'
+        );
+      });
+
+      window.addEventListener('error', function (event) {
+        log('window error：' + (event.message || 'unknown'), 'err');
+      });
+
+      document.getElementById('reload-btn').addEventListener('click', function () {
+        setUrl(urlInput.value.trim() || DEFAULT_URL);
+        loadFrame();
+      });
+
+      urlInput.addEventListener('keydown', function (event) {
+        if (event.key === 'Enter') {
+          setUrl(urlInput.value.trim() || DEFAULT_URL);
+          loadFrame();
+        }
+      });
+
+      document.getElementById('new-tab-btn').addEventListener('click', function () {
+        window.open(targetUrl, '_blank', 'noopener');
+      });
+
+      viewportSelect.addEventListener('change', function () {
+        viewportBox.classList.remove('viewport-tablet', 'viewport-phone');
+        if (viewportSelect.value === 'tablet') {
+          viewportBox.classList.add('viewport-tablet');
+        } else if (viewportSelect.value === 'phone') {
+          viewportBox.classList.add('viewport-phone');
+        }
+        log('模拟视口切换为：' + viewportSelect.options[viewportSelect.selectedIndex].text);
+      });
+
+      function wsSchemeUrl(raw) {
+        var text = (raw || '').trim();
+        if (!text) {
+          return '';
+        }
+        if (/^wss?:\/\//i.test(text)) {
+          return text;
+        }
+        if (/^https?:\/\//i.test(text)) {
+          return text.replace(/^http/i, 'ws');
+        }
+        var scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        return scheme + '//' + window.location.host + (text.charAt(0) === '/' ? '' : '/') + text;
+      }
+
+      function closeSocket() {
+        if (!socket) {
+          return;
+        }
+        var old = socket;
+        socket = null;
+        try {
+          old.close(1000, 'fixture teardown');
+        } catch (err) {
+          /* ignore */
+        }
+      }
+
+      document.getElementById('ws-connect-btn').addEventListener('click', function () {
+        var url = wsSchemeUrl(wsInput.value);
+        if (!url) {
+          log('WS 探测：请输入 ws 地址或路径', 'warn');
+          return;
+        }
+        closeSocket();
+        log('WS 连接：' + url);
+        try {
+          socket = new WebSocket(url);
+        } catch (err) {
+          log('WS 构造失败：' + err.message, 'err');
+          return;
+        }
+        socket.addEventListener('open', function () {
+          log('WS open（握手成功，DevTools 应显示 101）', 'ok');
+        });
+        socket.addEventListener('message', function (event) {
+          log('WS message：' + String(event.data).slice(0, 160));
+        });
+        socket.addEventListener('close', function (event) {
+          log('WS close：code=' + event.code + ' reason=' + (event.reason || '-'), 'warn');
+        });
+        socket.addEventListener('error', function () {
+          log('WS error（握手失败或跨源被拒，结合 DevTools Network 判断）', 'err');
+        });
+      });
+
+      document.getElementById('ws-close-btn').addEventListener('click', function () {
+        closeSocket();
+        log('WS 已由夹具主动关闭');
+      });
+
+      function tickClock() {
+        var d = new Date();
+        function p(n) { return String(n).padStart(2, '0'); }
+        clockEl.textContent = p(d.getHours()) + ':' + p(d.getMinutes());
+      }
+
+      wsInput.value = wsParam;
+      setUrl(targetUrl, false);
+      tickClock();
+      window.setInterval(tickClock, 30000);
+      log('夹具就绪；父页面 origin=' + window.location.origin);
+      log('提示：本页只是父页面模拟，CSP 判定要求与 iframe 同源（见右侧说明）', 'warn');
+      loadFrame();
+    })();
+  </script>
+</body>
+</html>

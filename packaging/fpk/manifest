@@ -2,7 +2,7 @@ appname="hermes-desktop"
 version="0.22.6"
 display_name="Hermes Desktop"
 desc="NousResearch 出品的 AI Agent 工作区，完整运行在飞牛 NAS 上。对话流式输出、工具调用可视化、并排预览、文件浏览、Artifacts、定时任务、多 Profile、技能管理、终端栏、Git 审阅一应俱全，内置飞牛 NAS 技能，装完即可操控本机。基于官方 Webapp 形态（gateway 内建渲染层），无需 Electron。支持浏览器直连与飞牛桌面内嵌两种入口。"
-platform="all"
+platform="x86"
 source="thirdparty"
 
 maintainer="NousResearch"
@@ -18,6 +18,5 @@ service_port="9120"
 # SameSite=lax 的 Cookie 不会发送，登录状态维持不住。
 # 网关把 /app/hermes-desktop/* 转到应用目录下的 app.sock，由适配层转给 Hermes。
 checkport="false"
-micro_app="true"
 ctl_stop="true"
 install_dep_apps="python312"

@@ -15,6 +15,11 @@
 
 LOG_FILE="${TRIM_PKGVAR}/info.log"
 DATA_DIR="${TRIM_PKGVAR}"
+ETC_DIR="${TRIM_PKGETC:-$(dirname "${DATA_DIR}")/etc}"
+CONFIG_FILE="${ETC_DIR}/config.yaml"
+ACCESS_INFO="${ETC_DIR}/access-info.txt"
+GATEWAY_CONF_SRC="${TRIM_APPDEST}/runtime/gateway/gateway.conf"
+GATEWAY_CONF_ETC="${ETC_DIR}/gateway.conf"
 VENV_DIR="${DATA_DIR}/venv"
 UV_BIN="${DATA_DIR}/bin/uv"
 SRC_DIR="${DATA_DIR}/src"
@@ -23,8 +28,8 @@ WEBAPP_DIST="${TRIM_APPDEST}/webapp"
 # 源码版本标签；留空则用 main 分支
 HERMES_REF="${HERMES_REF:-main}"
 
-# 服务端口：与 manifest 的 service_port 保持一致。
-# fnOS 安装阶段通常不注入 TRIM_SERVICE_PORT，故以 manifest 值为准并做兜底。
+# 服务端口固定使用 manifest 的 service_port（与 app/ui/config、adapter 一致），
+# 不再做端口顺延 —— 换端口会让桌面入口与网关适配层全部对不上。
 SERVICE_PORT="${TRIM_SERVICE_PORT:-9120}"
 case "${SERVICE_PORT}" in
     ''|*[!0-9]*) SERVICE_PORT="9120" ;;
@@ -50,61 +55,55 @@ gen_password() {
     fi
 }
 
-# ── 选择可用端口 ────────────────────────────────────────────────────────
-# 首选 TRIM_SERVICE_PORT（默认 9120）；被占用则顺延到 29220-29259。
-# 典型冲突场景：本机还跑着另一个 Hermes 实例（Docker 版）占着 9120。
-# 见 cmd/main 中 is_port_in_use 的说明：
-# /proc/net/tcp 的 local_address 是 "地址:端口"（无空格），状态列 0A 表示 LISTEN。
-port_in_use() {
-    local port="$1" hex_port
-    hex_port=$(printf "%04X" "${port}")
-    awk -v p="${hex_port}" '
-        $4 == "0A" {
-            split($2, a, ":")
-            if (toupper(a[2]) == p) { found = 1; exit }
-        }
-        END { exit(found ? 0 : 1) }
-    ' /proc/net/tcp /proc/net/tcp6 2>/dev/null
-}
+# ── etc / var 布局准备（REFACTOR-CONTRACT §3.2） ─────────────────────────
+# 配置实体只放 etc（TRIM_PKGETC，0600）；var 只放运行数据，
+# var/config.yaml 是指向 ../etc/config.yaml 的符号链接。
+prepare_layout() {
+    mkdir -p "${DATA_DIR}" "${ETC_DIR}" 2>/dev/null || true
 
-choose_free_port() {
-    local candidate
-    if ! port_in_use "${SERVICE_PORT}"; then
-        log_msg "使用端口 ${SERVICE_PORT}"
-        return 0
-    fi
-    log_msg "端口 ${SERVICE_PORT} 已被其他服务占用，自动顺延"
-    for candidate in $(seq 29220 29259); do
-        if ! port_in_use "${candidate}"; then
-            SERVICE_PORT="${candidate}"
-            log_msg "改用端口 ${SERVICE_PORT}"
-            return 0
+    # 旧布局迁移：config.yaml 从 var 移到 etc，var 留符号链接。
+    if [ -f "${DATA_DIR}/config.yaml" ] && [ ! -L "${DATA_DIR}/config.yaml" ]; then
+        if [ ! -f "${CONFIG_FILE}" ]; then
+            mv -f "${DATA_DIR}/config.yaml" "${CONFIG_FILE}" 2>/dev/null || true
+            log_msg "已迁移旧配置 ${DATA_DIR}/config.yaml → ${CONFIG_FILE}"
+        else
+            rm -f "${DATA_DIR}/config.yaml" 2>/dev/null || true
+            log_msg "etc 已有 config.yaml，清理 var 中的旧副本"
         fi
-    done
-    log_msg "29220-29259 均被占用，仍使用 ${SERVICE_PORT}（启动可能失败）"
-    return 1
-}
-
-# 端口变了，桌面图标入口与 manifest 必须同步，否则图标打不开
-sync_ui_port() {
-    local port="$1"
-    local ui_cfg="${TRIM_APPDEST}/app/ui/config"
-    local mf="${TRIM_APPDEST}/manifest"
-
-    if [ -f "${ui_cfg}" ]; then
-        sed -i "s|\"port\"[[:space:]]*:[[:space:]]*\"[0-9]\{1,5\}\"|\"port\": \"${port}\"|" "${ui_cfg}" 2>/dev/null || true
-        log_msg "桌面入口端口已同步为 ${port}"
     fi
-    if [ -f "${mf}" ]; then
-        sed -i "s|^service_port[[:space:]]*=.*|service_port=\"${port}\"|" "${mf}" 2>/dev/null || true
+    if [ ! -e "${DATA_DIR}/config.yaml" ]; then
+        ln -sfn "../etc/config.yaml" "${DATA_DIR}/config.yaml" 2>/dev/null || true
     fi
+
+    # 访问信息同样归 etc
+    if [ -f "${DATA_DIR}/access-info.txt" ] && [ ! -L "${DATA_DIR}/access-info.txt" ]; then
+        if [ ! -f "${ACCESS_INFO}" ]; then
+            mv -f "${DATA_DIR}/access-info.txt" "${ACCESS_INFO}" 2>/dev/null || true
+        else
+            rm -f "${DATA_DIR}/access-info.txt" 2>/dev/null || true
+        fi
+    fi
+
+    # gateway.conf：单一来源是 target/runtime/gateway/，etc 留一份 0600 参考副本
+    if [ -f "${GATEWAY_CONF_SRC}" ]; then
+        cp -f "${GATEWAY_CONF_SRC}" "${GATEWAY_CONF_ETC}" 2>/dev/null || true
+        chmod 600 "${GATEWAY_CONF_ETC}" 2>/dev/null || true
+    fi
+
+    # 旧网关代理脚本（本轮已删除）在数据目录的残留副本 / 日志 / pid
+    rm -f "${DATA_DIR}/gateway_proxy.py" "${DATA_DIR}/fnos_bridge.py" \
+          "${DATA_DIR}/gateway-proxy.pid" "${DATA_DIR}/gateway-proxy.log" 2>/dev/null || true
+    # 旧版适配层 socket 残留（当前适配层监听 target/app.sock，启动时重建）
+    rm -f "${TRIM_APPDEST}/app.sock" 2>/dev/null || true
+
+    log_msg "布局就绪：etc=${ETC_DIR} var=${DATA_DIR}"
     return 0
 }
 
 # ── 处理安装向导输入 ────────────────────────────────────────────────────
 # 向导变量（无 TRIM_ 前缀）在安装时以环境变量形式注入
 apply_wizard_settings() {
-    local cfg="${DATA_DIR}/config.yaml"
+    local cfg="${CONFIG_FILE}"
     local user="${wizard_web_user:-admin}"
     local pass="${wizard_web_pass:-}"
 
@@ -113,7 +112,7 @@ apply_wizard_settings() {
         log_msg "未设置密码，已生成随机密码"
     fi
 
-    mkdir -p "${DATA_DIR}" 2>/dev/null || true
+    mkdir -p "${DATA_DIR}" "${ETC_DIR}" 2>/dev/null || true
     [ -f "${cfg}" ] || printf '# Hermes Agent 配置\n' > "${cfg}"
 
     # 只在缺失时追加，避免重复安装产生重复段落。
@@ -232,19 +231,13 @@ EOF
         fi
     fi
 
-    # 把网关适配层脚本部署到数据目录。
-    # 放在数据目录（应用用户可写）而不是 cmd/（root 只读），
-    # 这样后续排障可以直接替换脚本、不必重装应用。
-    local proxy_src="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
-    if [ -f "${proxy_src}/gateway_proxy.py" ]; then
-        cp -f "${proxy_src}/gateway_proxy.py" "${DATA_DIR}/gateway_proxy.py" 2>/dev/null || true
-        cp -f "${proxy_src}/fnos_bridge.py" "${DATA_DIR}/fnos_bridge.py" 2>/dev/null || true
-        chmod +x "${DATA_DIR}/gateway_proxy.py" 2>/dev/null || true
-        log_msg "网关适配层脚本已部署到 ${DATA_DIR}"
-    fi
+    # 网关适配层随包分发给 target/runtime/gateway/（只读运行期组件，见
+    # REFACTOR-CONTRACT §3.1），安装期不再复制到数据目录。
+    # 旧版本曾把 gateway_proxy.py / fnos_bridge.py 部署到数据目录，
+    # 这两个脚本已删除，迁移时由 install/upgrade 回调清理残留副本。
 
-    # 把访问信息单独存一份，便于用户查阅
-    local info="${DATA_DIR}/access-info.txt"
+    # 把访问信息单独存一份到 etc（0600），便于用户查阅
+    local info="${ACCESS_INFO}"
     cat > "${info}" <<EOF
 Hermes Desktop（飞牛版）访问信息
 ================================
@@ -434,10 +427,14 @@ fetch_source() {
 
 # ── 安装（关键：Python 3.14 + 官方源 + 放宽 exclude-newer） ──────────────
 install_hermes() {
-    # 预置缺失的运行时库（fnOS 没有 libatomic.so.1，pm 装 node 会失败）
-    if [ -f "$(dirname "$0")/libs.sh" ]; then
-        . "$(dirname "$0")/libs.sh"
+    # 预置缺失的运行时库（fnOS 没有 libatomic.so.1，pm 装 node 会失败）。
+    # libs.sh 已按 REFACTOR-CONTRACT §3.1 移到只读的 target/runtime/lib/。
+    local libs_sh="${TRIM_APPDEST}/runtime/lib/libs.sh"
+    if [ -f "${libs_sh}" ]; then
+        . "${libs_sh}"
         ensure_libatomic || true
+    else
+        log_msg "警告：未找到运行时库脚本 ${libs_sh}（跳过 libatomic 预置）"
     fi
 
     # HOME 必须指向应用自己的 home 目录。
@@ -710,14 +707,13 @@ verify_fnos_skill() {
 # ── 主流程 ──────────────────────────────────────────────────────────────
 log_msg "=== install_callback 开始 ==="
 log_msg "DATA_DIR=${DATA_DIR}"
+log_msg "ETC_DIR=${ETC_DIR}"
 
-mkdir -p "${DATA_DIR}" 2>/dev/null || true
+prepare_layout
 
 verify_webapp || exit 1
-# 先选端口，再写配置：配置里的 port 必须与实际监听的端口一致
-choose_free_port || log_msg "端口选择异常，将使用 ${SERVICE_PORT}"
+# 端口固定使用 manifest.service_port（不换端口：桌面入口与适配层都按它配置）
 apply_wizard_settings || exit 1
-sync_ui_port "${SERVICE_PORT}"
 ensure_uv || exit 1
 fetch_source || exit 1
 install_hermes || exit 1
@@ -725,10 +721,13 @@ deploy_fnos_skill
 deploy_bundled_plugins
 verify_fnos_skill || log_msg "飞牛 Skill 部署校验未通过，但不影响主功能"
 
-# 修复属主：应用以专用用户运行，确保数据目录可写
+# 修复属主：应用以专用用户运行，确保数据目录与 etc 配置可读写
 if [ -n "${TRIM_UID}" ] && [ -n "${TRIM_GID}" ]; then
     chown -R "${TRIM_UID}:${TRIM_GID}" "${DATA_DIR}" 2>/dev/null || true
+    chown -R "${TRIM_UID}:${TRIM_GID}" "${ETC_DIR}" 2>/dev/null || true
 fi
+# etc 内的敏感文件保持 0600（contract §3.2）
+chmod 600 "${CONFIG_FILE}" "${ACCESS_INFO}" "${GATEWAY_CONF_ETC}" 2>/dev/null || true
 
 log_msg "=== install_callback 完成 ==="
 exit 0

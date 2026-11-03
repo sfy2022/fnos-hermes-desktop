@@ -2,44 +2,57 @@
 #
 # Hermes Desktop（飞牛版）— 生命周期管理
 #
-#   start  : 启动 hermes gateway（内建 Webapp 渲染层，监听 9120）
-#   stop   : 优雅停止
-#   status : 运行中返回 0，未运行返回 3
+#   start    : 启动 hermes gateway（内建 Webapp 渲染层，监听 9120）
+#              并在 target/app.sock 上启动薄网关适配层（fnOS 统一网关入口）
+#   stop     : 优雅停止 gateway 与适配层，清理 socket/PID
+#   status   : 运行中返回 0，未运行返回 3
+#   restart  : stop + start
+#   log      : 打印运行日志尾部（默认 100 行）
+#   diagnose : 诊断端口 / 适配层 / Socket / 两级 CSP / 日志尾部
 #
-# 架构说明：
+# 架构（见 docs/REFACTOR-CONTRACT.md）：
+#   iframe → fnOS 网关 → target/app.sock → gateway_adapter.py → 127.0.0.1:9120
+#
 #   官方 Desktop 的渲染层有两构建产物 —— Electron 包与 Webapp bundle。
 #   本应用使用官方 Webapp 形态：gateway 在 webapp.port 上伺服打包进来的
-#   渲染层（HERMES_WEBAPP_DIST 指向 app/webapp），桌面图标以 iframe 打开。
+#   渲染层（HERMES_WEBAPP_DIST 指向 target/webapp），桌面图标以 iframe 打开。
 #   与官方 Windows/macOS Desktop 用的是同一套 UI 代码，仅承载方式不同。
+#
+#   网关适配层脚本随包分发在 target/runtime/gateway/（只读），
+#   prefix / socket 名以 target/runtime/gateway/gateway.conf 为单一来源，
+#   与 app/ui/config 的 gatewayPrefix / gatewaySocket 必须一致。
+#
+# 目录约定（contract §3.2）：
+#   target/ 只读运行文件；etc/ 配置（0600）；var/ 运行数据（HERMES_HOME）；
+#   HOME=TRIM_PKGHOME。脚本只通过 TRIM_* 变量定位目录，不硬编码 /var/apps。
 
 LOG_FILE="${TRIM_PKGVAR}/info.log"
-PID_FILE="${TRIM_PKGVAR}/app.pid"
-
 DATA_DIR="${TRIM_PKGVAR}"
+ETC_DIR="${TRIM_PKGETC:-$(dirname "${DATA_DIR}")/etc}"
+CONFIG_FILE="${ETC_DIR}/config.yaml"
+ACCESS_INFO="${ETC_DIR}/access-info.txt"
+PID_FILE="${DATA_DIR}/app.pid"
+
 VENV_DIR="${DATA_DIR}/venv"
 HERMES_BIN="${VENV_DIR}/bin/hermes"
 SRC_DIR="${DATA_DIR}/src"
 WEBAPP_DIST="${TRIM_APPDEST}/webapp"
 
+GATEWAY_CONF="${TRIM_APPDEST}/runtime/gateway/gateway.conf"
+ADAPTER="${TRIM_APPDEST}/runtime/gateway/gateway_adapter.py"
+ADAPTER_PID_FILE="${DATA_DIR}/gateway-adapter.pid"
+ADAPTER_LOG="${DATA_DIR}/gateway-adapter.log"
+ADAPTER_HEALTH_PATH="/.gateway-health"
+
 SERVICE_PORT="${TRIM_SERVICE_PORT:-9120}"
-# fnOS 统一网关接入：应用在 Unix Socket 上提供 HTTP 服务，
-# 由 fnOS 网关按 gatewayPrefix 转发，实现桌面图标内嵌窗口打开。
-GATEWAY_SOCKET="${TRIM_APPDEST}/app.sock"
-GATEWAY_PREFIX="/app/hermes-desktop"
-# 网关适配层脚本位置。优先用数据目录下的副本（可热替换，便于排障时
-# 直接改脚本而不必重装）；没有则用随包分发的 cmd/ 下的版本。
-GATEWAY_PROXY="${DATA_DIR}/gateway_proxy.py"
-if [ ! -f "${GATEWAY_PROXY}" ]; then
-    GATEWAY_PROXY="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/gateway_proxy.py"
-fi
-GATEWAY_PID_FILE="${DATA_DIR}/gateway-proxy.pid"
-# 额外的对外 TCP 端口，供浏览器直接访问（同样免登录：Host 头保持回环地址，
-# 上游因此判定为本地请求）。桌面上「Hermes Desktop (直连)」图标指向它。
-GATEWAY_TCP_PORT="${TRIM_GATEWAY_TCP_PORT:-9121}"
 case "${SERVICE_PORT}" in
     ''|*[!0-9]*) SERVICE_PORT="9120" ;;
 esac
-FALLBACK_PORT=29220
+
+# prefix / socket 名由 gateway.conf 注入（单一来源）；解析失败时退回冻结值。
+GATEWAY_PREFIX=""
+GATEWAY_SOCKET_NAME=""
+GATEWAY_SOCKET=""
 
 log_msg() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "${LOG_FILE}" 2>/dev/null || true
@@ -50,6 +63,24 @@ toast_err() {
         echo "$1" > "${TRIM_TEMP_LOGFILE}" 2>/dev/null || true
     fi
     log_msg "ERROR: $1"
+}
+
+# 读取 gateway.conf（key=value，仅认 prefix / socket_name）。
+load_gateway_conf() {
+    local key value
+    if [ -f "${GATEWAY_CONF}" ]; then
+        while IFS='=' read -r key value || [ -n "${key}" ]; do
+            value="$(printf '%s' "${value}" | tr -d '[:space:]')"
+            case "${key}" in
+                prefix)      GATEWAY_PREFIX="${value}" ;;
+                socket_name) GATEWAY_SOCKET_NAME="${value}" ;;
+            esac
+        done < "${GATEWAY_CONF}"
+    fi
+    # 兜底值与 app/ui/config 的 gatewayPrefix / gatewaySocket 保持一致
+    [ -n "${GATEWAY_PREFIX}" ] || GATEWAY_PREFIX="/app/hermes-desktop"
+    [ -n "${GATEWAY_SOCKET_NAME}" ] || GATEWAY_SOCKET_NAME="app.sock"
+    GATEWAY_SOCKET="${TRIM_APPDEST}/${GATEWAY_SOCKET_NAME}"
 }
 
 # 判断端口是否已被占用。
@@ -68,14 +99,10 @@ is_port_in_use() {
     ' /proc/net/tcp /proc/net/tcp6 2>/dev/null
 }
 
-# 端口被占用时逐个探测备用端口，直到找到空闲的。
-# 注意：SERVICE_PORT 只是环境变量，gateway 真正读的是 config.yaml 里的 webapp.port，
-# 所以必须同步写回配置，否则改了变量也白改（gateway 仍会去抢被占用的端口）。
 # 找出占用指定 TCP 端口的进程 PID（Linux，读 /proc）。
 is_port_in_use_pids() {
     local port="$1"
     local inode="" pid="" fd="" link=""
-    # 端口的 socket inode 可从 /proc/net/tcp 里拿到（十六进制端口）
     local hexport
     hexport=$(printf '%04X' "${port}")
     for f in /proc/net/tcp /proc/net/tcp6; do
@@ -101,24 +128,15 @@ is_port_in_use_pids() {
     done | sort -u
 }
 
+# 端口固定使用 SERVICE_PORT（manifest.service_port / 桌面入口一致）：
+# 不换端口 —— 换了就与 app/ui/config 的 port、adapter 的 --upstream 对不上，
+# 表现为「启动成功但端口不监听」→ fnOS 报「启动失败」。
+# 这里只清理同 home 的残留 Hermes 进程；清不掉就明确失败，让用户处理占用者。
 pick_port() {
-    local cfg="${DATA_DIR}/config.yaml"
-    local candidate
-
-    # 首选：配置里已记录的端口（若它空闲就用它）
     if ! is_port_in_use "${SERVICE_PORT}"; then
         return 0
     fi
 
-    # 该端口被占用 —— 不换端口。
-    #
-    # 桌面入口（app/ui/config 的 port）、网关适配层的 --upstream 都固定写
-    # ${SERVICE_PORT}，换成别的端口就全部对不上，表现正是「启动成功但
-    # 端口不监听」→ fnOS 报「启动失败」。
-    # 而且旧实现会把备用端口永久写进 config.yaml，一次临时占用就让端口
-    # 永久漂移（曾漂到 29220 再也回不来）。
-    #
-    # 正确做法：先清理占用者（同 home 的残留 Hermes），清不掉就明确失败。
     log_msg "[端口] ${SERVICE_PORT} 已被占用，尝试清理残留实例"
 
     local stale
@@ -138,16 +156,6 @@ pick_port() {
         return 1
     fi
     log_msg "[端口] 已清理，继续使用 ${SERVICE_PORT}"
-
-    # 把新端口写回配置，让 gateway 真正用上
-    if [ -f "${cfg}" ]; then
-        sed -i "s/^\([[:space:]]*port:[[:space:]]*\)[0-9]\{1,5\}/\1${SERVICE_PORT}/" "${cfg}" 2>/dev/null || true
-        # 若配置里没有 port 行（理论上不会），则补一行
-        if ! grep -q "^[[:space:]]*port:[[:space:]]*${SERVICE_PORT}" "${cfg}" 2>/dev/null; then
-            sed -i "s/^\([[:space:]]*host:[[:space:]]*0\.0\.0\.0\)/\1\n  port: ${SERVICE_PORT}/" "${cfg}" 2>/dev/null || true
-        fi
-        log_msg "[端口] 配置已同步为 ${SERVICE_PORT}"
-    fi
     return 0
 }
 
@@ -168,10 +176,28 @@ status() {
     return 1
 }
 
-# 确保 webapp 配置存在（install_callback 已按向导写入；此处只做兜底）
+# etc / var 布局自愈：配置只放 etc，var 里用符号链接指回去（contract §3.2）。
+ensure_home_layout() {
+    mkdir -p "${DATA_DIR}" "${ETC_DIR}" 2>/dev/null || true
+
+    # 旧布局迁移：var/config.yaml → etc/config.yaml，var 留符号链接。
+    if [ -f "${DATA_DIR}/config.yaml" ] && [ ! -L "${DATA_DIR}/config.yaml" ]; then
+        if [ ! -f "${CONFIG_FILE}" ]; then
+            mv -f "${DATA_DIR}/config.yaml" "${CONFIG_FILE}" 2>/dev/null || true
+            log_msg "已将 ${DATA_DIR}/config.yaml 迁移到 ${CONFIG_FILE}"
+        else
+            rm -f "${DATA_DIR}/config.yaml" 2>/dev/null || true
+        fi
+    fi
+    if [ ! -e "${DATA_DIR}/config.yaml" ]; then
+        ln -sfn "../etc/config.yaml" "${DATA_DIR}/config.yaml" 2>/dev/null || true
+    fi
+}
+
+# 确保 webapp 配置存在（install_callback 已按向导写入 etc；此处只做兜底）。
 ensure_webapp_config() {
-    local cfg="${DATA_DIR}/config.yaml"
-    mkdir -p "${DATA_DIR}" 2>/dev/null || true
+    local cfg="${CONFIG_FILE}"
+    mkdir -p "${ETC_DIR}" 2>/dev/null || true
     [ -f "${cfg}" ] || printf '# Hermes Agent 配置\n' > "${cfg}"
 
     if grep -q "^webapp:" "${cfg}" 2>/dev/null; then
@@ -190,7 +216,7 @@ ensure_webapp_config() {
         return 0
     fi
 
-    # 兜底：安装时未写入（异常情况），生成随机密码并落盘
+    # 兜底：安装时未写入（异常情况），生成随机密码并落盘到 etc
     local pass
     pass="$(tr -dc 'A-Za-z0-9' < /dev/urandom 2>/dev/null | head -c 20)"
     [ -n "${pass}" ] || pass="$(date +%s | sha256sum | cut -c1-20)"
@@ -209,15 +235,15 @@ dashboard:
     password: "${pass}"
 EOF
     chmod 600 "${cfg}" 2>/dev/null || true
-    cat > "${DATA_DIR}/access-info.txt" <<EOF
+    cat > "${ACCESS_INFO}" <<EOF
 Hermes Desktop（飞牛版）访问信息
 ================================
 地址:     http://<本机IP>:${SERVICE_PORT}
 用户名:   admin
 密码:     ${pass}
 EOF
-    chmod 600 "${DATA_DIR}/access-info.txt" 2>/dev/null || true
-    log_msg "已生成 webapp 配置与访问信息（见 ${DATA_DIR}/access-info.txt）"
+    chmod 600 "${ACCESS_INFO}" 2>/dev/null || true
+    log_msg "已生成 webapp 配置与访问信息（见 ${ACCESS_INFO}）"
 }
 
 SKILL_DIR="${DATA_DIR}/skills/fnos-trim"
@@ -248,26 +274,67 @@ heal_fnos_skill() {
     return 0
 }
 
+# 适配层健康检查：优先 curl，没 curl 时用 python 直接走 Unix Socket。
+adapter_healthy() {
+    [ -S "${GATEWAY_SOCKET}" ] || return 1
+    local health_url="http://localhost${GATEWAY_PREFIX}${ADAPTER_HEALTH_PATH}"
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -sf -o /dev/null --max-time 3 --unix-socket "${GATEWAY_SOCKET}" \
+            "${health_url}" 2>/dev/null
+        return $?
+    fi
+
+    local py="${VENV_DIR}/bin/python3"
+    [ -x "${py}" ] || py="$(command -v python3 2>/dev/null)"
+    [ -n "${py}" ] || return 1
+
+    "${py}" - "${GATEWAY_SOCKET}" "${GATEWAY_PREFIX}${ADAPTER_HEALTH_PATH}" <<'PY'
+import socket
+import sys
+
+sock_path, path = sys.argv[1], sys.argv[2]
+try:
+    conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    conn.settimeout(3)
+    conn.connect(sock_path)
+    conn.sendall(
+        ("GET %s HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n" % path).encode()
+    )
+    head = conn.recv(256).decode("latin-1", "replace")
+    conn.close()
+except OSError:
+    sys.exit(1)
+status_line = head.splitlines()[0] if head else ""
+sys.exit(0 if " 200 " in status_line else 1)
+PY
+}
+
 # 启动 fnOS 统一网关适配层。
 #
 # 为什么需要：桌面内嵌窗口要求 iframe 与飞牛桌面同源（:5666），
 # 否则 SameSite=lax 的会话 Cookie 不会发送，登录状态无法维持。
-# fnOS 网关只把 gatewayPrefix 转发到应用目录的 Unix Socket，
+# fnOS 网关只把 gatewayPrefix 转发到应用 target 目录的 Unix Socket，
 # 因此应用要提供一个 HTTP-over-Unix-Socket 的转发层。
-start_gateway_proxy() {
-    if [ ! -f "${GATEWAY_PROXY}" ]; then
-        log_msg "网关代理脚本缺失，跳过（${GATEWAY_PROXY}）"
+start_gateway_adapter() {
+    if [ ! -f "${ADAPTER}" ]; then
+        toast_err "网关适配层缺失：${ADAPTER}，请重新安装应用。"
         return 1
     fi
 
-    if [ -f "${GATEWAY_PID_FILE}" ]; then
+    if [ -f "${ADAPTER_PID_FILE}" ]; then
         local gpid
-        gpid="$(head -n 1 "${GATEWAY_PID_FILE}" 2>/dev/null | tr -d '[:space:]')"
+        gpid="$(head -n 1 "${ADAPTER_PID_FILE}" 2>/dev/null | tr -d '[:space:]')"
         if [ -n "${gpid}" ] && check_process "${gpid}"; then
-            log_msg "网关代理已在运行（PID=${gpid}）"
-            return 0
+            if adapter_healthy; then
+                log_msg "网关适配层已在运行（PID=${gpid}）"
+                return 0
+            fi
+            log_msg "网关适配层进程存在但健康检查失败，重启"
+            kill -TERM "${gpid}" 2>/dev/null || true
+            sleep 1
         fi
-        rm -f "${GATEWAY_PID_FILE}"
+        rm -f "${ADAPTER_PID_FILE}" 2>/dev/null || true
     fi
 
     rm -f "${GATEWAY_SOCKET}" 2>/dev/null || true
@@ -276,42 +343,65 @@ start_gateway_proxy() {
     local py="${VENV_DIR}/bin/python3"
     [ -x "${py}" ] || py="$(command -v python3 2>/dev/null)"
     if [ -z "${py}" ] || [ ! -x "${py}" ]; then
-        log_msg "找不到可用的 python3，跳过网关代理"
+        toast_err "找不到可用的 python3，无法启动网关适配层。"
         return 1
     fi
 
-    log_msg "启动 fnOS 网关适配层（socket=${GATEWAY_SOCKET} → 127.0.0.1:${SERVICE_PORT}）"
-    nohup "${py}" "${GATEWAY_PROXY}" \
+    log_msg "启动网关适配层（socket=${GATEWAY_SOCKET} → 127.0.0.1:${SERVICE_PORT}，prefix=${GATEWAY_PREFIX}）"
+    nohup "${py}" "${ADAPTER}" \
         --socket "${GATEWAY_SOCKET}" \
         --upstream "127.0.0.1:${SERVICE_PORT}" \
         --prefix "${GATEWAY_PREFIX}" \
-        --tcp-listen "0.0.0.0:${GATEWAY_TCP_PORT}" \
-        --hermes-home "${DATA_DIR}" \
-        >> "${DATA_DIR}/gateway-proxy.log" 2>&1 &
+        --health-path "${ADAPTER_HEALTH_PATH}" \
+        >"${ADAPTER_LOG}" 2>&1 &
 
     local gpid=$!
-    printf "%s" "${gpid}" > "${GATEWAY_PID_FILE}"
+    printf "%s" "${gpid}" > "${ADAPTER_PID_FILE}"
 
     local waited=0
     while [ "${waited}" -lt 15 ]; do
-        if [ -S "${GATEWAY_SOCKET}" ]; then
-            log_msg "网关适配层就绪（${GATEWAY_SOCKET}，直连端口 ${GATEWAY_TCP_PORT}）"
-            return 0
-        fi
         if ! check_process "${gpid}"; then
             log_msg "网关适配层启动失败，日志尾部："
-            tail -8 "${DATA_DIR}/gateway-proxy.log" 2>/dev/null | while IFS= read -r line; do
+            tail -8 "${ADAPTER_LOG}" 2>/dev/null | while IFS= read -r line; do
                 log_msg "  ${line}"
             done
-            rm -f "${GATEWAY_PID_FILE}"
+            rm -f "${ADAPTER_PID_FILE}" "${GATEWAY_SOCKET}" 2>/dev/null || true
             return 1
+        fi
+        if [ -S "${GATEWAY_SOCKET}" ] && adapter_healthy; then
+            log_msg "网关适配层就绪（${GATEWAY_SOCKET}）"
+            return 0
         fi
         sleep 1
         waited=$((waited + 1))
     done
 
-    log_msg "网关适配层启动超时（socket 未出现）"
+    log_msg "网关适配层未在 15s 内就绪（socket 或健康检查失败），详见 ${ADAPTER_LOG}"
     return 1
+}
+
+stop_gateway_adapter() {
+    local gpid=""
+    if [ -f "${ADAPTER_PID_FILE}" ]; then
+        gpid="$(head -n 1 "${ADAPTER_PID_FILE}" 2>/dev/null | tr -d '[:space:]')"
+        if [ -n "${gpid}" ] && check_process "${gpid}"; then
+            log_msg "停止网关适配层（PID=${gpid}）"
+            kill -TERM "${gpid}" 2>/dev/null || true
+            local i=0
+            while check_process "${gpid}" && [ "${i}" -lt 10 ]; do
+                sleep 1
+                i=$((i + 1))
+            done
+            check_process "${gpid}" && kill -KILL "${gpid}" 2>/dev/null || true
+        fi
+        rm -f "${ADAPTER_PID_FILE}" 2>/dev/null || true
+    fi
+    # 兜底：按随包 adapter 路径匹配（不会误杀其它进程）
+    pkill -TERM -f "${ADAPTER}" 2>/dev/null || true
+    sleep 1
+    pkill -KILL -f "${ADAPTER}" 2>/dev/null || true
+    rm -f "${GATEWAY_SOCKET}" 2>/dev/null || true
+    log_msg "网关适配层已停止，socket 已清理"
 }
 
 start_process() {
@@ -330,11 +420,13 @@ start_process() {
         return 1
     fi
 
+    ensure_home_layout
     pick_port
     ensure_webapp_config
     heal_fnos_skill || log_msg "飞牛 Skill 补回失败（如需请手动安装官方 fnOS Skill）"
 
-    # HERMES_HOME 指向应用数据目录：会话、技能、记忆、配置全部落在这里
+    # HERMES_HOME 指向应用数据目录（var）：会话、技能、记忆、运行数据都在这里；
+    # 配置实体在 etc/config.yaml，var/config.yaml 是指向它的符号链接。
     export HERMES_HOME="${DATA_DIR}"
     # HOME 指向应用自己的 home 目录。fnOS 注入的是 /home/<appname>，
     # 那个路径并不存在（真实目录是 /vol1/@apphome/<appname>），
@@ -382,8 +474,8 @@ start_process() {
         fi
         if is_port_in_use "${SERVICE_PORT}"; then
             log_msg "服务就绪，端口 ${SERVICE_PORT} 已监听"
-            # 桌面内嵌入口需要网关适配层（app.sock）；网页入口直连 9120 不依赖它
-            start_gateway_proxy
+            # 桌面内嵌入口需要网关适配层（target/app.sock）；网页直连 9120 不依赖它
+            start_gateway_adapter
             return 0
         fi
         sleep 1
@@ -391,7 +483,7 @@ start_process() {
     done
 
     log_msg "等待 ${waited}s 后未确认端口监听，但进程存活，继续运行"
-    start_gateway_proxy
+    start_gateway_adapter
     return 0
 }
 
@@ -415,33 +507,113 @@ stop_process() {
         fi
         rm -f "${PID_FILE}"
     fi
+
+    # 网关适配层先停，避免它继续占着 app.sock
+    stop_gateway_adapter
+
     # 兜底清理残留进程。
     # 注意：不能用 `pkill -f "hermes gateway"` —— 实际命令行里
     # "hermes" 与 "gateway" 之间隔着 runpy 代码，那样匹配不到，
     # 会留下进程继续占用 9120 端口。改用本应用 venv 路径匹配，
     # 带路径前缀也不会误杀用户手动跑的其它 Hermes 实例。
-    # 网关适配层也要停，否则会一直占着 app.sock
-    if [ -f "${GATEWAY_PID_FILE}" ]; then
-        local gpid
-        gpid="$(head -n 1 "${GATEWAY_PID_FILE}" 2>/dev/null | tr -d '[:space:]')"
-        if [ -n "${gpid}" ] && check_process "${gpid}"; then
-            kill -TERM "${gpid}" 2>/dev/null || true
-            sleep 1
-            kill -KILL "${gpid}" 2>/dev/null || true
-        fi
-        rm -f "${GATEWAY_PID_FILE}" 2>/dev/null || true
-    fi
-    pkill -TERM -f "gateway_proxy.py" 2>/dev/null || true
     pkill -TERM -f "${DATA_DIR}/venv/bin" 2>/dev/null || true
     pkill -TERM -f "${DATA_DIR}.*gateway" 2>/dev/null || true
     sleep 1
-    pkill -KILL -f "gateway_proxy.py" 2>/dev/null || true
     pkill -KILL -f "${DATA_DIR}/venv/bin" 2>/dev/null || true
     pkill -KILL -f "${DATA_DIR}.*gateway" 2>/dev/null || true
     rm -f "${GATEWAY_SOCKET}" 2>/dev/null || true
     log_msg "已停止"
     return 0
 }
+
+# 取响应头中的某个字段（通过 curl；没有 curl 时返回空）。
+http_header() {
+    local header="$1"
+    shift
+    command -v curl >/dev/null 2>&1 || return 0
+    curl -sSI --max-time 5 "$@" 2>/dev/null | tr -d '\r' \
+        | awk -v h="${header}:" '
+            tolower(substr($0, 1, length(h))) == h {
+                sub(/^[^:]+:[[:space:]]*/, "")
+                print
+                exit
+            }'
+}
+
+# diagnose：端口 / 适配层 / Socket / 两级 CSP / 日志尾部。
+diagnose() {
+    echo "Hermes Desktop 诊断"
+    echo "  TRIM_APPDEST            : ${TRIM_APPDEST}"
+    echo "  TRIM_PKGVAR             : ${TRIM_PKGVAR}"
+    echo "  TRIM_PKGETC             : ${TRIM_PKGETC}"
+    echo "  TRIM_PKGHOME            : ${TRIM_PKGHOME}"
+    echo "  SERVICE_PORT            : ${SERVICE_PORT}"
+    echo "  GATEWAY_PREFIX          : ${GATEWAY_PREFIX}"
+    echo "  GATEWAY_SOCKET          : ${GATEWAY_SOCKET}"
+    echo "  ADAPTER                 : ${ADAPTER}"
+    echo "  gateway.conf            : ${GATEWAY_CONF}"
+    echo ""
+
+    echo "[1] hermes gateway 进程"
+    if status; then
+        echo "    运行中（PID=$(head -n 1 "${PID_FILE}" | tr -d '[:space:]')）"
+    else
+        echo "    未运行"
+    fi
+
+    echo "[2] 端口 ${SERVICE_PORT}"
+    if is_port_in_use "${SERVICE_PORT}"; then
+        echo "    监听中"
+    else
+        echo "    未监听（FAIL）"
+    fi
+
+    echo "[3] 网关适配层"
+    local gpid=""
+    [ -f "${ADAPTER_PID_FILE}" ] && gpid="$(head -n 1 "${ADAPTER_PID_FILE}" 2>/dev/null | tr -d '[:space:]')"
+    if [ -n "${gpid}" ] && check_process "${gpid}"; then
+        echo "    进程运行中（PID=${gpid}）"
+    else
+        echo "    进程未运行（FAIL）"
+    fi
+    if [ -S "${GATEWAY_SOCKET}" ]; then
+        if adapter_healthy; then
+            echo "    Socket 存在且健康检查通过：${GATEWAY_SOCKET}"
+        else
+            echo "    Socket 存在但健康检查失败：${GATEWAY_SOCKET}（FAIL）"
+        fi
+    else
+        echo "    Socket 缺失：${GATEWAY_SOCKET}（FAIL）"
+    fi
+
+    echo "[4] 两级 CSP（直连 :${SERVICE_PORT} 应为 frame-ancestors 'none'；经网关应为 'self'）"
+    local csp_direct csp_gateway xfo_direct xfo_gateway
+    csp_direct="$(http_header content-security-policy "http://127.0.0.1:${SERVICE_PORT}/")"
+    csp_gateway="$(http_header content-security-policy --unix-socket "${GATEWAY_SOCKET}" \
+        "http://localhost${GATEWAY_PREFIX}/")"
+    xfo_direct="$(http_header x-frame-options "http://127.0.0.1:${SERVICE_PORT}/")"
+    xfo_gateway="$(http_header x-frame-options --unix-socket "${GATEWAY_SOCKET}" \
+        "http://localhost${GATEWAY_PREFIX}/")"
+
+    echo "    [直连] CSP              : ${csp_direct:-<无响应/无该头>}"
+    echo "    [网关] CSP              : ${csp_gateway:-<无响应/无该头>}"
+    echo "    [直连] X-Frame-Options  : ${xfo_direct:-<无响应/无该头>}"
+    echo "    [网关] X-Frame-Options  : ${xfo_gateway:-<无响应/无该头>}"
+
+    echo "[5] 日志尾部（${LOG_FILE}）"
+    tail -n 10 "${LOG_FILE}" 2>/dev/null | while IFS= read -r line; do
+        echo "    ${line}"
+    done
+
+    echo "[6] 适配层日志尾部（${ADAPTER_LOG}）"
+    tail -n 10 "${ADAPTER_LOG}" 2>/dev/null | while IFS= read -r line; do
+        echo "    ${line}"
+    done
+
+    return 0
+}
+
+load_gateway_conf
 
 case "$1" in
 start)
@@ -465,6 +637,9 @@ restart)
 log)
     tail -n "${2:-100}" "${LOG_FILE}" 2>/dev/null
     ;;
+diagnose)
+    diagnose
+    ;;
 setup-fnos)
     # 打印飞牛 Skill 的授权指引与当前状态
     if [ ! -d "${SKILL_DIR}" ]; then
@@ -482,7 +657,7 @@ setup-fnos)
     "${SKILL_DIR}/scripts/trim-cli" +status 2>&1 | head -5
     ;;
 *)
-    echo "Usage: $0 {start|stop|status|restart|log|setup-fnos}" > "${TRIM_TEMP_LOGFILE}"
+    echo "Usage: $0 {start|stop|status|restart|log|diagnose|setup-fnos}" > "${TRIM_TEMP_LOGFILE}"
     exit 1
     ;;
 esac

@@ -1,6 +1,11 @@
 #!/bin/bash
 #
-# 卸载前回调 — 停止服务
+# 卸载前回调 — 停止服务并把值得留存的数据归档到存储卷根目录
+#
+# 目录约定（REFACTOR-CONTRACT §3.2）：
+#   etc/  配置（config.yaml、access-info.txt、gateway.conf）
+#   var/  运行数据（HERMES_HOME）
+#   home/ HOME=TRIM_PKGHOME（.config/trim-cli 等）
 #
 # 进程终止要点：
 #   实际命令行形如
@@ -9,14 +14,59 @@
 #   因此 `pkill -f "hermes gateway"` 匹配不到，会留下僵尸进程继续占用端口与文件。
 #   这里改为：先用 PID 文件精确终止，再用本应用 venv 路径做兜底匹配
 #   （带路径前缀，不会误杀用户手动跑的其它 Hermes 实例）。
+#
+# 网关适配层（target/app.sock）也要停：pause_gateway 只停 Hermes 本体。
 
 LOG_DIR="${TRIM_PKGVAR}"
 LOG_FILE="${LOG_DIR}/info.log"
 PID_FILE="${LOG_DIR}/app.pid"
+ETC_DIR="${TRIM_PKGETC:-$(dirname "${LOG_DIR}")/etc}"
+ADAPTER_PID_FILE="${LOG_DIR}/gateway-adapter.pid"
+ADAPTER="${TRIM_APPDEST}/runtime/gateway/gateway_adapter.py"
+GATEWAY_SOCKET="${TRIM_APPDEST}/app.sock"
 
 log_msg() {
     mkdir -p "${LOG_DIR}" 2>/dev/null || true
     echo "$(date '+%Y-%m-%d %H:%M:%S') - [uninstall_init] $1" >> "${LOG_FILE}" 2>/dev/null || true
+}
+
+# 从 gateway.conf 解析 socket 名（单一来源；缺失时退回 app.sock）
+load_gateway_socket() {
+    local conf="${TRIM_APPDEST}/runtime/gateway/gateway.conf"
+    local key value socket_name=""
+    if [ -f "${conf}" ]; then
+        while IFS='=' read -r key value || [ -n "${key}" ]; do
+            if [ "${key}" = "socket_name" ]; then
+                socket_name="$(printf '%s' "${value}" | tr -d '[:space:]')"
+            fi
+        done < "${conf}"
+    fi
+    [ -n "${socket_name}" ] || socket_name="app.sock"
+    GATEWAY_SOCKET="${TRIM_APPDEST}/${socket_name}"
+}
+
+stop_gateway_adapter() {
+    local gpid=""
+    if [ -f "${ADAPTER_PID_FILE}" ]; then
+        gpid="$(head -n 1 "${ADAPTER_PID_FILE}" 2>/dev/null | tr -d '[:space:]')"
+        if [ -n "${gpid}" ] && kill -0 "${gpid}" 2>/dev/null; then
+            log_msg "停止网关适配层（PID=${gpid}）"
+            kill -TERM "${gpid}" 2>/dev/null || true
+            local i=0
+            while kill -0 "${gpid}" 2>/dev/null && [ "${i}" -lt 10 ]; do
+                sleep 1
+                i=$((i + 1))
+            done
+            kill -KILL "${gpid}" 2>/dev/null || true
+        fi
+        rm -f "${ADAPTER_PID_FILE}" 2>/dev/null || true
+    fi
+    # 兜底：按随包 adapter 路径匹配（不会误杀其它进程）
+    pkill -TERM -f "${ADAPTER}" 2>/dev/null || true
+    sleep 1
+    pkill -KILL -f "${ADAPTER}" 2>/dev/null || true
+    rm -f "${GATEWAY_SOCKET}" 2>/dev/null || true
+    return 0
 }
 
 stop_app_processes() {
@@ -25,12 +75,16 @@ stop_app_processes() {
     #    root 之外的账户即使同组也无法对它发信号，pkill 常常够不着。
     #    "pause-for-update" 会 drain 请求、停监听后自行退出，
     #    比 kill 干净，不会留下半开的数据库或 socket 文件。
+    load_gateway_socket
     if [ -f "$(dirname "$0")/pause_gateway.py" ]; then
         python3 "$(dirname "$0")/pause_gateway.py" "${TRIM_PKGVAR}" 2>/dev/null || true
         sleep 2
     fi
 
-    # 1) PID 文件精确终止
+    # 1) 先停网关适配层（它只在 target/app.sock 上，不影响 Hermes 数据）
+    stop_gateway_adapter
+
+    # 2) PID 文件精确终止
     if [ -f "${PID_FILE}" ]; then
         local pid
         pid="$(head -n 1 "${PID_FILE}" 2>/dev/null | tr -d '[:space:]')"
@@ -46,7 +100,7 @@ stop_app_processes() {
         rm -f "${PID_FILE}" 2>/dev/null || true
     fi
 
-    # 2) 兜底：只匹配本应用 venv 下的进程（带路径前缀，不会误杀其它实例）
+    # 3) 兜底：只匹配本应用 venv 下的进程（带路径前缀，不会误杀其它实例）
     pkill -TERM -f "${TRIM_PKGVAR}/venv/bin" 2>/dev/null || true
     pkill -TERM -f "${TRIM_PKGVAR}.*gateway" 2>/dev/null || true
     sleep 2
@@ -62,15 +116,29 @@ stop_app_processes
 # 这里也留一份"逃生通道"，万一之后手动清理了数据目录还能找回。
 archive_dir="$(dirname "$(dirname "${TRIM_APPDEST}")")"
 [ -d "${archive_dir}" ] || archive_dir="/vol1"
-if [ -d "${TRIM_PKGVAR}" ] && [ -w "${archive_dir}" ]; then
+if [ -w "${archive_dir}" ]; then
     stamp="$(date +%Y%m%d-%H%M%S)"
     dest="${archive_dir}/hermes-desktop-backup-${stamp}"
     if mkdir -p "${dest}" 2>/dev/null; then
-        for item in config.yaml access-info.txt fnos-skill-setup.txt state sessions \
-                    backups channel_directory.json gateway_state.json; do
-            [ -e "${TRIM_PKGVAR}/${item}" ] && cp -r "${TRIM_PKGVAR}/${item}" "${dest}/" 2>/dev/null || true
-        done
-        [ -d "${TRIM_PKGVAR}/.config" ] && cp -r "${TRIM_PKGVAR}/.config" "${dest}/" 2>/dev/null || true
+        # 配置（etc）：config.yaml / access-info.txt / gateway.conf
+        if [ -d "${ETC_DIR}" ]; then
+            mkdir -p "${dest}/etc" 2>/dev/null || true
+            for item in config.yaml access-info.txt gateway.conf; do
+                [ -e "${ETC_DIR}/${item}" ] && cp -r "${ETC_DIR}/${item}" "${dest}/etc/" 2>/dev/null || true
+            done
+        fi
+        # 运行数据（var）
+        if [ -d "${TRIM_PKGVAR}" ]; then
+            for item in config.yaml access-info.txt fnos-skill-setup.txt state sessions \
+                        backups channel_directory.json gateway_state.json; do
+                [ -e "${TRIM_PKGVAR}/${item}" ] && cp -r "${TRIM_PKGVAR}/${item}" "${dest}/" 2>/dev/null || true
+            done
+            [ -d "${TRIM_PKGVAR}/.config" ] && cp -r "${TRIM_PKGVAR}/.config" "${dest}/" 2>/dev/null || true
+        fi
+        # home（TRIM_PKGHOME）：trim-cli 的 OAuth 凭据等
+        if [ -d "${TRIM_PKGHOME}/.config" ]; then
+            cp -r "${TRIM_PKGHOME}/.config" "${dest}/home-config" 2>/dev/null || true
+        fi
         log_msg "数据已归档到 ${dest}"
     fi
 fi

@@ -1,7 +1,7 @@
 # 冒烟自检：不构建完整渲染层，验证流水线各环节是否正常
 #
 # 用途：改完打包脚本后快速验证（约 1 分钟），
-#      确认"组装 fpk 目录 → 打包 → 校验"这条链路没被改坏。
+#      确认"组装 fpk 目录 → 结构检查 → 打包 → 校验"这条链路没被改坏。
 #
 # 用法：bash scripts/smoke.sh
 set -euo pipefail
@@ -12,42 +12,44 @@ WORK_DIR="${WORK_DIR:-${REPO_ROOT}/.build-smoke}"
 log() { printf '\033[0;36m[smoke]\033[0m %s\n' "$*"; }
 die() { printf '\033[0;31m[fail]\033[0m %s\n' "$*" >&2; exit 1; }
 
-log "1/5 校验模板文件"
+log "1/6 校验模板文件"
 for f in manifest cmd/main cmd/install_callback cmd/install_init \
          cmd/upgrade_callback cmd/upgrade_init \
          cmd/uninstall_callback cmd/uninstall_init \
          cmd/config_callback cmd/config_init \
          config/privilege config/resource \
          wizard/install wizard/upgrade wizard/uninstall wizard/config \
-         app/ui/config ICON.PNG ICON_256.PNG; do
+         app/ui/config ICON.PNG ICON_256.PNG \
+         app/runtime/gateway/gateway_adapter.py \
+         app/runtime/gateway/gateway.conf \
+         app/runtime/lib/libs.sh; do
   [ -f "${REPO_ROOT}/packaging/fpk/${f}" ] || die "缺少文件：packaging/fpk/${f}"
 done
 log "    模板完整"
 
-log "2/5 校验脚本语法"
-for f in "${REPO_ROOT}"/packaging/fpk/cmd/* "${REPO_ROOT}"/packaging/fpk/app/skills/fnos-trim/scripts/trim-cli; do
+log "2/6 校验脚本语法"
+while IFS= read -r f; do
   [ -f "${f}" ] || continue
-  # 按扩展名分流：.py 用 Python 解释器检查，其余按 shell 检查
   case "${f}" in
     *.py) PYTHONPYCACHEPREFIX=/tmp/.smoke-pycache python3 -m py_compile "${f}" 2>/dev/null || die "Python 语法错误：${f}" ;;
-    *)   bash -n "${f}" || die "shell 语法错误：${f}" ;;
+    *)    bash -n "${f}" || die "shell 语法错误：${f}" ;;
   esac
-done
+done < <(find "${REPO_ROOT}/packaging/fpk/cmd" \
+              "${REPO_ROOT}/packaging/fpk/app/runtime" \
+              "${REPO_ROOT}/packaging/fpk/app/skills/fnos-trim/scripts" \
+              -type f 2>/dev/null)
 log "    全部通过"
 
-log "2b/5 校验换行符（Linux 执行，CRLF 会导致 bad interpreter）"
+log "2b/6 校验换行符（Linux 执行，CRLF 会导致 bad interpreter）"
 python3 - <<'PY'
 import pathlib, sys
 base = pathlib.Path("packaging/fpk")
-targets = list((base / "cmd").iterdir())
-targets += [base / "app/skills/fnos-trim/scripts/trim-cli"]
-bad = []
-for p in targets:
-    if not p.is_file():
-        continue
-    raw = p.read_bytes()
-    if b"\r\n" in raw:
-        bad.append(str(p))
+targets = [p for p in (base / "cmd").rglob("*") if p.is_file()]
+targets += [p for p in (base / "app/runtime").rglob("*") if p.is_file()]
+script = base / "app/skills/fnos-trim/scripts/trim-cli"
+if script.is_file():
+    targets.append(script)
+bad = [str(p) for p in targets if b"\r\n" in p.read_bytes()]
 if bad:
     print("[fail] 以下文件含 CRLF：")
     for b in bad:
@@ -56,7 +58,7 @@ if bad:
 print(f"[smoke]     {len(targets)} 个脚本均为 LF")
 PY
 
-log "3/5 校验 JSON 文件"
+log "3/6 校验 JSON 文件"
 python3 - <<'PY'
 import json, sys, pathlib
 base = pathlib.Path("packaging/fpk")
@@ -71,13 +73,15 @@ for rel in ["app/ui/config", "config/privilege", "config/resource",
 print("[smoke]     JSON 全部合法")
 PY
 
-log "4/5 打包（用占位渲染层）"
+log "4/6 组装占位包并跑结构检查"
 rm -rf "${WORK_DIR}"
 mkdir -p "${WORK_DIR}/fpk/app/webapp"
 cp -r "${REPO_ROOT}/packaging/fpk/." "${WORK_DIR}/fpk/"
-# 放一个最小的占位 index.html，只验证打包链路
 printf '<!doctype html><title>smoke</title>\n' > "${WORK_DIR}/fpk/app/webapp/index.html"
+python3 "${REPO_ROOT}/scripts/check_fpk_layout.py" "${WORK_DIR}/fpk" || die "包结构检查失败"
+log "    包结构检查通过"
 
+log "5/6 打包"
 FNPACK="${WORK_DIR}/fnpack"
 case "$(uname -s)" in
   Linux)
@@ -96,16 +100,17 @@ curl -fsSL --retry 2 --max-time 120 -o "${FNPACK}" \
 chmod +x "${FNPACK}" 2>/dev/null || true
 ( cd "${WORK_DIR}" && "${FNPACK}" build --directory "${WORK_DIR}/fpk" ) || die "打包失败"
 
-log "5/5 校验产物"
+log "6/6 校验产物"
 FPK="$(find "${WORK_DIR}" -maxdepth 1 -name '*.fpk' | head -n 1)"
 [ -n "${FPK}" ] || die "未生成 fpk"
 python3 - "$FPK" <<'PY'
-import sys, tarfile, io
+import sys, tarfile
 with tarfile.open(sys.argv[1]) as t:
     names = [m.name for m in t.getmembers()]
     assert "manifest" in names, "缺少 manifest"
     assert "cmd/main" in names, "缺少 cmd/main"
     assert "wizard/install" in names, "缺少 wizard/install"
+    assert "app.tgz" in names, "缺少 app.tgz"
     mf = t.extractfile("manifest").read().decode()
     assert "appname" in mf and "service_port" in mf, "manifest 字段缺失"
     print(f"[smoke]     包内 {len(names)} 个条目，校验通过")

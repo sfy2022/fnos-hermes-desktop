@@ -5,7 +5,7 @@
 # 流程：
 #   1. 克隆/更新上游 hermes-agent 源码
 #   2. 用官方脚本构建 Webapp 渲染层（Desktop 的浏览器形态）
-#   3. 把渲染层塞进 fpk 模板
+#   3. 把渲染层塞进 fpk 模板，并做打包前门禁（py_compile / 布局 / 网关契约）
 #   4. 用 fnpack 打包成 .fpk
 #
 # 环境变量：
@@ -212,26 +212,29 @@ fi
 BUNDLE_FILES="$(find "${DIST_WEBAPP}" -type f | wc -l | tr -d ' ')"
 log "渲染层就绪：${BUNDLE_FILES} 个文件，$(du -sh "${DIST_WEBAPP}" | cut -f1)"
 
-# ── 2c. 校验运行时脚本完整且语法正确 ────────────────────────────────────
-# packaging/fpk/cmd/ 下的 .py 是随包分发的运行时脚本，唯一来源就在这里
-# （不再与 scripts/ 放副本，避免「改了源码没同步」这类问题）。
-for pair in "pause_gateway.py"; do
-    dist_file="${REPO_ROOT}/packaging/fpk/cmd/${pair}"
-    [ -f "${dist_file}" ] || die "缺少运行时脚本：${dist_file}"
-    PYTHONPYCACHEPREFIX=/tmp/.build-pycache python3 -m py_compile "${dist_file}" \
-        2>/dev/null || die "Python 语法错误：${dist_file}"
-done
-log "运行时脚本校验通过"
-
 # ── 3. 组装 fpk 目录 ────────────────────────────────────────────────────
 log "组装 fpk 目录"
 rm -rf "${FPK_DIR}"
 mkdir -p "${FPK_DIR}"
 cp -r "${REPO_ROOT}/packaging/fpk/." "${FPK_DIR}/"
 
-# 渲染层放进 app/webapp
+# 清理构建垃圾：包内不允许 __pycache__ / *.pyc / *.bak / .DS_Store
+# （REFACTOR-CONTRACT §3.1「包根只允许以上条目」）。
+find "${FPK_DIR}" \
+    \( -name '__pycache__' -o -name '.pytest_cache' -o -name '.mypy_cache' \) -type d -prune \
+    -exec rm -rf {} + 2>/dev/null || true
+find "${FPK_DIR}" \
+    \( -name '*.pyc' -o -name '*.pyo' -o -name '*.bak' -o -name '.DS_Store' \) -type f -delete \
+    2>/dev/null || true
+
+# 渲染层只允许构建注入：先清掉模板中可能残留的旧 app/webapp，再写入本次产物
+rm -rf "${FPK_DIR}/app/webapp"
 mkdir -p "${FPK_DIR}/app/webapp"
 cp -r "${DIST_WEBAPP}/." "${FPK_DIR}/app/webapp/"
+
+# 生命周期脚本必须可执行（fnpack 保留权限位；Windows 检出常丢失 +x）
+chmod +x "${FPK_DIR}"/cmd/* 2>/dev/null || true
+chmod +x "${FPK_DIR}"/app/runtime/gateway/*.py 2>/dev/null || true
 
 # 版本号写入 manifest
 if [ -f "${FPK_DIR}/manifest" ]; then
@@ -247,6 +250,29 @@ if [ -f "${FPK_DIR}/manifest" ]; then
   sed -i.bak "s|^desc[[:space:]]*=.*|desc                  = Hermes 官方 Desktop 工作区的飞牛原生版。保留完整 Desktop 体验：对话流式输出、工具调用可视化、并排预览、文件浏览、Artifacts、定时任务、多 Profile、技能管理、终端栏、Git 审阅。基于官方 Webapp 形态（gateway 内建渲染层），无需 Electron，浏览器内即原生体验。上游 commit ${UPSTREAM_SHA}。|" "${FPK_DIR}/manifest"
   rm -f "${FPK_DIR}/manifest.bak"
 fi
+
+# ── 3.5 打包前门禁 ──────────────────────────────────────────────────────
+# 1) 随包分发的 Python 运行时脚本必须语法正确：
+#    adapter（薄网关适配层）与 pause_gateway（卸载/升级期优雅停机辅助）。
+for py_rel in "app/runtime/gateway/gateway_adapter.py" "cmd/pause_gateway.py"; do
+    py_file="${FPK_DIR}/${py_rel}"
+    [ -f "${py_file}" ] || die "缺少运行时脚本：${py_file}"
+    PYTHONPYCACHEPREFIX=/tmp/.build-pycache python3 -m py_compile "${py_file}" \
+        2>/dev/null || die "Python 语法错误：${py_file}"
+done
+log "运行时脚本语法校验通过"
+
+# 2) 结构与网关契约门禁（脚本由 QA 提供，接口固定：<script> <FPK_DIR>）
+run_gate() {
+    local rel="$1" script
+    shift
+    script="${REPO_ROOT}/${rel}"
+    [ -f "${script}" ] || die "缺少校验脚本：${script}（由 QA 提供，见 REFACTOR-CONTRACT §6）"
+    log "校验 ${rel}"
+    python3 "${script}" "$@" || die "校验失败：${rel}"
+}
+run_gate "scripts/check_fpk_layout.py" "${FPK_DIR}"
+run_gate "scripts/check_gateway_contract.py" "${FPK_DIR}"
 
 # ── 4. 打包 ─────────────────────────────────────────────────────────────
 log "获取 fnpack"

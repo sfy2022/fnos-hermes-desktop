@@ -13,13 +13,12 @@
             "title": "Hermes Desktop (桌面内嵌)",
             "icon": "images/icon_{0}.png",
             "type": "iframe",
-            "protocol": "",
             "gatewayPrefix": "/app/hermes-desktop",
             "gatewaySocket": "app.sock",
             "url": "/app/hermes-desktop",
             "allUsers": true,
             "control": {
-                "accessPerm": "editable"
+                "accessPerm": "readonly"
             }
         }
     }

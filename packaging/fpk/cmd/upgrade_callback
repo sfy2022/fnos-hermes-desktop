@@ -4,9 +4,22 @@
 #
 # 与 install_callback 保持同一套环境约束：
 #   Python 3.14 + 官方 PyPI 源 + 放宽 exclude-newer
+#
+# 同时完成 etc/var 布局迁移（REFACTOR-CONTRACT §3.2）：
+#   - 配置实体 → etc/config.yaml（0600），var/config.yaml 变为指向它的符号链接
+#   - access-info.txt → etc
+#   - gateway.conf 参考副本 → etc（单一来源仍是 target/runtime/gateway/gateway.conf）
+#   - 清理旧网关代理脚本（gateway_proxy.py / fnos_bridge.py）在 var 的残留
+#
+# 升级会重新 clone 源码，src/plugins/ 被整目录替换 —— 随包内置插件必须重新放回去。
 
 LOG_FILE="${TRIM_PKGVAR}/info.log"
 DATA_DIR="${TRIM_PKGVAR}"
+ETC_DIR="${TRIM_PKGETC:-$(dirname "${DATA_DIR}")/etc}"
+CONFIG_FILE="${ETC_DIR}/config.yaml"
+ACCESS_INFO="${ETC_DIR}/access-info.txt"
+GATEWAY_CONF_SRC="${TRIM_APPDEST}/runtime/gateway/gateway.conf"
+GATEWAY_CONF_ETC="${ETC_DIR}/gateway.conf"
 VENV_DIR="${DATA_DIR}/venv"
 UV_BIN="${DATA_DIR}/bin/uv"
 SRC_DIR="${DATA_DIR}/src"
@@ -16,7 +29,74 @@ log_msg() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - [upgrade_callback] $1" >> "${LOG_FILE}" 2>/dev/null || true
 }
 
+# etc / var 布局迁移：配置实体只放 etc，var 里留符号链接。
+migrate_layout() {
+    mkdir -p "${DATA_DIR}" "${ETC_DIR}" 2>/dev/null || true
+
+    if [ -f "${DATA_DIR}/config.yaml" ] && [ ! -L "${DATA_DIR}/config.yaml" ]; then
+        if [ ! -f "${CONFIG_FILE}" ]; then
+            mv -f "${DATA_DIR}/config.yaml" "${CONFIG_FILE}" 2>/dev/null || true
+            log_msg "已迁移旧配置 ${DATA_DIR}/config.yaml → ${CONFIG_FILE}"
+        else
+            rm -f "${DATA_DIR}/config.yaml" 2>/dev/null || true
+            log_msg "etc 已有 config.yaml，清理 var 中的旧副本"
+        fi
+    fi
+    if [ ! -e "${DATA_DIR}/config.yaml" ]; then
+        ln -sfn "../etc/config.yaml" "${DATA_DIR}/config.yaml" 2>/dev/null || true
+    fi
+
+    if [ -f "${DATA_DIR}/access-info.txt" ] && [ ! -L "${DATA_DIR}/access-info.txt" ]; then
+        if [ ! -f "${ACCESS_INFO}" ]; then
+            mv -f "${DATA_DIR}/access-info.txt" "${ACCESS_INFO}" 2>/dev/null || true
+        else
+            rm -f "${DATA_DIR}/access-info.txt" 2>/dev/null || true
+        fi
+    fi
+
+    if [ -f "${GATEWAY_CONF_SRC}" ]; then
+        cp -f "${GATEWAY_CONF_SRC}" "${GATEWAY_CONF_ETC}" 2>/dev/null || true
+        chmod 600 "${GATEWAY_CONF_ETC}" 2>/dev/null || true
+    fi
+
+    # 旧网关代理（已删除）在数据目录的残留副本 / 日志 / pid
+    rm -f "${DATA_DIR}/gateway_proxy.py" "${DATA_DIR}/fnos_bridge.py" \
+          "${DATA_DIR}/gateway-proxy.pid" "${DATA_DIR}/gateway-proxy.log" 2>/dev/null || true
+    # 旧适配层 pid 文件（adapter 进程命令行已变，重启时按新路径重新拉起）
+    rm -f "${DATA_DIR}/gateway-proxy.pid" 2>/dev/null || true
+
+    log_msg "布局迁移完成：etc=${ETC_DIR} var=${DATA_DIR}"
+    return 0
+}
+
+# 升级期间可能残留旧适配层进程（上一版 gateway_adapter.py，或更早的
+# gateway_proxy.py）。它们占着 target/app.sock 且跑着旧代码，必须清理，
+# 由升级后的 cmd/main start 重新拉起新版本。
+stop_stale_adapter() {
+    local pid_file="${DATA_DIR}/gateway-adapter.pid"
+    local gpid=""
+    if [ -f "${pid_file}" ]; then
+        gpid="$(head -n 1 "${pid_file}" 2>/dev/null | tr -d '[:space:]')"
+        if [ -n "${gpid}" ] && kill -0 "${gpid}" 2>/dev/null; then
+            log_msg "清理升级前的网关适配层进程（PID=${gpid}）"
+            kill -TERM "${gpid}" 2>/dev/null || true
+            sleep 1
+            kill -KILL "${gpid}" 2>/dev/null || true
+        fi
+        rm -f "${pid_file}" 2>/dev/null || true
+    fi
+    # 兜底：按随包 adapter 路径匹配（不会误杀其它进程）
+    pkill -TERM -f "${TRIM_APPDEST}/runtime/gateway/gateway_adapter.py" 2>/dev/null || true
+    sleep 1
+    pkill -KILL -f "${TRIM_APPDEST}/runtime/gateway/gateway_adapter.py" 2>/dev/null || true
+    rm -f "${TRIM_APPDEST}/app.sock" 2>/dev/null || true
+    return 0
+}
+
 log_msg "=== upgrade_callback 开始 ==="
+
+migrate_layout
+stop_stale_adapter
 
 if [ ! -x "${UV_BIN}" ] || [ ! -x "${VENV_DIR}/bin/python3" ]; then
     log_msg "运行环境不完整，跳过更新（建议卸载后重装）"
@@ -45,10 +125,6 @@ if [ -f "${SRC_DIR}/pyproject.toml" ]; then
     log_msg "依赖更新完成"
 fi
 
-if [ -n "${TRIM_UID}" ] && [ -n "${TRIM_GID}" ]; then
-    chown -R "${TRIM_UID}:${TRIM_GID}" "${DATA_DIR}" 2>/dev/null || true
-fi
-
 # ── 重新部署内置插件 ──────────────────────────────────────────────────
 # 升级会重新 clone 源码，src/plugins/ 被整目录替换 —— 随包内置的插件
 # 必须重新放回去，否则升级后 dashboard tab 直接消失。
@@ -60,7 +136,7 @@ deploy_bundled_plugins() {
     for d in "${src}"/*/; do
         [ -d "${d}" ] || continue
         name="$(basename "${d}")"
-        for dst in "${TRIM_PKGVAR}/src/plugins/${name}" "${TRIM_PKGVAR}/plugins/${name}"; do
+        for dst in "${DATA_DIR}/src/plugins/${name}" "${DATA_DIR}/plugins/${name}"; do
             mkdir -p "$(dirname "${dst}")" 2>/dev/null || true
             rm -rf "${dst}"
             if cp -r "${src}/${name}" "${dst}" 2>/dev/null; then
@@ -70,15 +146,22 @@ deploy_bundled_plugins() {
         done
         # desktop-plugins 要平铺的 plugin.js（runtime door 的形态），不能整目录拷
         if [ -f "${src}/${name}/desktop/plugin.js" ]; then
-            mkdir -p "${TRIM_PKGVAR}/desktop-plugins/${name}" 2>/dev/null || true
+            mkdir -p "${DATA_DIR}/desktop-plugins/${name}" 2>/dev/null || true
             cp -f "${src}/${name}/desktop/plugin.js" \
-                  "${TRIM_PKGVAR}/desktop-plugins/${name}/plugin.js" 2>/dev/null || true
+                  "${DATA_DIR}/desktop-plugins/${name}/plugin.js" 2>/dev/null || true
         fi
     done
     return 0
 }
 
 deploy_bundled_plugins
+
+# 修复属主与 etc 权限
+if [ -n "${TRIM_UID}" ] && [ -n "${TRIM_GID}" ]; then
+    chown -R "${TRIM_UID}:${TRIM_GID}" "${DATA_DIR}" 2>/dev/null || true
+    chown -R "${TRIM_UID}:${TRIM_GID}" "${ETC_DIR}" 2>/dev/null || true
+fi
+chmod 600 "${CONFIG_FILE}" "${ACCESS_INFO}" "${GATEWAY_CONF_ETC}" 2>/dev/null || true
 
 log_msg "=== upgrade_callback 完成 ==="
 exit 0

@@ -1,0 +1,58 @@
+name: 单元测试与包门禁
+
+# 轻量 CI：不构建 fpk（构建需要 Node 26 + 上游源码，见 build.yml），只跑
+# 纯标准库的单元测试与打包前门禁，保证「布局 / 网关契约」在 PR 阶段就拦住
+# 回归。Linux runner 会额外执行 gateway adapter 的 AF_UNIX 集成用例。
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - 'refactor/**'
+    paths:
+      - 'scripts/**'
+      - 'packaging/**'
+      - 'tests/**'
+      - '.github/workflows/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fnos-hermes-desktop-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: unittest + 布局/网关门禁
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 检出本仓库
+        uses: actions/checkout@v4
+
+      - name: 安装 Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 环境信息
+        run: |
+          python3 --version
+          uname -a
+
+      - name: 单元测试（含 gateway adapter AF_UNIX 集成用例）
+        run: python3 -m unittest discover -s tests -v
+
+      - name: FPK 布局检查（模板/源码包模式）
+        run: python3 scripts/check_fpk_layout.py packaging/fpk --template
+
+      - name: 网关三方契约检查
+        run: python3 scripts/check_gateway_contract.py packaging/fpk
+
+      - name: 随包 Python 脚本语法检查
+        run: |
+          python3 -m py_compile \
+            packaging/fpk/app/runtime/gateway/gateway_adapter.py \
+            packaging/fpk/cmd/pause_gateway.py

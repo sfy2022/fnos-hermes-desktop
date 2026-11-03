@@ -16,6 +16,9 @@
 #
 # fnOS 自带的 nodejs_v24 应用虽然自带 node，但 pm 采取 store-first 策略
 # （把自己下载的版本放在 PATH 最前），所以光加 PATH 挡不住它下载。
+#
+# 位置：随包分发的只读组件（target/runtime/lib/libs.sh），由 install_callback
+# 等生命周期脚本 source 使用；调用方需先定义 DATA_DIR 与 log_msg。
 
 LIB_DIR="${DATA_DIR}/lib"
 
