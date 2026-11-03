@@ -57,7 +57,7 @@ gen_password() {
 
 # ── etc / var 布局准备（REFACTOR-CONTRACT §3.2） ─────────────────────────
 # 配置实体只放 etc（TRIM_PKGETC，0600）；var 只放运行数据，
-# var/config.yaml 是指向 ../etc/config.yaml 的符号链接。
+# var/config.yaml 是指向 etc/config.yaml 的符号链接（fnOS 的 var/etc 不在同一父目录，必须用绝对目标）。
 prepare_layout() {
     mkdir -p "${DATA_DIR}" "${ETC_DIR}" 2>/dev/null || true
 
@@ -72,7 +72,7 @@ prepare_layout() {
         fi
     fi
     if [ ! -e "${DATA_DIR}/config.yaml" ]; then
-        ln -sfn "../etc/config.yaml" "${DATA_DIR}/config.yaml" 2>/dev/null || true
+        ln -sfn "${CONFIG_FILE}" "${DATA_DIR}/config.yaml" 2>/dev/null || true
     fi
 
     # 访问信息同样归 etc

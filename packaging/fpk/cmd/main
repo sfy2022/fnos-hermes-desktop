@@ -190,7 +190,7 @@ ensure_home_layout() {
         fi
     fi
     if [ ! -e "${DATA_DIR}/config.yaml" ]; then
-        ln -sfn "../etc/config.yaml" "${DATA_DIR}/config.yaml" 2>/dev/null || true
+        ln -sfn "${CONFIG_FILE}" "${DATA_DIR}/config.yaml" 2>/dev/null || true
     fi
 }
 

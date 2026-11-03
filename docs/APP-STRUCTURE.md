@@ -360,4 +360,4 @@ find packaging/fpk \( -name '__pycache__' -o -name '*.pyc' -o -name '*.bak' \
 | 5 | `etc/` 权限 | 已冻结：文件 0600、目录 0700（见契约 §3.2） |
 | 6 | 网页直连入口与内嵌入口的默认打开方式 | 当前 `desktop_applaunchname=hermes-desktop.Application`；是否改为内嵌入口待产品确认 |
 | 7 | adapter `--log-file` | 已实现（可选；`cmd/main` 仍重定向到 `var/gateway-adapter.log`） |
-| 8 | 真机安装/升级验收 | 待 e5 执行（安装、CSP 两级、WS、升级清理） |
+| 8 | 真机安装/升级验收 | e5 已安装 0.22.6 并验证 adapter/登录/CSP/WS；升级因 `appcenter-cli` 限制未执行；`var` 符号链接缺陷已修复（见 `reports/qa-embedded.md`） |

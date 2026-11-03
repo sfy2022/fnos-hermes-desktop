@@ -63,26 +63,52 @@
 
 ## 5. 真机安装与内嵌验收（e5）
 
-（按实际执行结果填写：`appcenter-cli install-fpk --env`、start、CSP 两级、WS、升级/卸载。）
+在 e5 上安装本仓库重构包（`0.22.6`，含新 adapter/main/布局），`appcenter-cli` 安装成功、应用 running：
 
-- 安装：
-- 启动：
-- 直连 `:9120` CSP：
-- 适配层 socket CSP：
-- 健康端点：
-- 升级迁移：
-- 卸载清理：
+| 项 | 结果 |
+|---|---|
+| `appcenter-cli list` | `hermes-desktop | Hermes Desktop | 0.22.6 | running` |
+| `target/app.sock` | 存在（adapter 监听） |
+| `/.gateway-health`（经 socket） | 200：`{"ok":true,"adapter":"fnos-gateway-adapter","version":"1.0.0",...,"upstream_ok":true}` |
+| 直连 `:9120` | 登录后 200；CSP `frame-ancestors 'none'`（未被放宽） |
+| 适配层 socket `/app/hermes-desktop/` | 登录后 200；CSP **`frame-ancestors 'self'`**；sha256 哈希/`base-uri`/`form-action` 保留 |
+| 经适配层登录 | `POST /app/hermes-desktop/auth/password-login` → 200 `{"ok":true,"next":"/app/hermes-desktop/"}`；Cookie `Path=/app/hermes-desktop` |
+| 经适配层 WS | `POST /api/webapp/socket-ticket?socket=gateway` 取票 → `GET /app/hermes-desktop/api/ws?native_dial=browser&ticket=…` → **101 Switching Protocols** |
+| 飞牛网关 `:5666/app/hermes-desktop` | 无浏览器会话时返回 `invalid token`（网关要求飞牛登录态）；真实 iframe 视觉验收需浏览器 |
+
+### 5.1 真机发现并已修复的缺陷
+
+1. **etc/var 符号链接目标错误**：`var/config.yaml -> ../etc/config.yaml` 在 fnOS 下指向
+   `/vol1/@appdata/etc`（不存在），Hermes 读不到配置 → webapp 不监听 9120。
+   已改为绝对目标 `${CONFIG_FILE}`（install/main/upgrade 三处）。
+   真机验证时手工修正该链接后，9120 立即监听、全部链路通过。
+2. **首装认证回退**：首装时 venv 未就绪，scrypt 哈希生成失败 → `host=127.0.0.1`。
+   已增加 `install_callback.finalize_webapp_auth` 与 `cmd/main` 运行期自愈（从 etc/access-info 取密码补哈希）。
+3. 组装脚本曾把 `__pycache__` 带进包；已在构建脚本用 `PYTHONPYCACHEPREFIX` 并清理。
+
+### 5.2 未执行/未验证
+
+- `appcenter-cli install-fpk` 对已安装应用提示“请从 Web UI 卸载”，**升级路径未执行**；
+  0.22.13 升级包已构建并通过布局/契约门禁，待 UI 或干净设备验证。
+  真机测试使用 0.22.6 包 + 手工修正符号链接，因此 §5.1 的两处修复在真机上是“修复后行为已验证、
+  修复代码本身待下次全新安装验证”。
+- 浏览器 iframe 实际渲染、fnOS 桌面内嵌窗口未执行（e5 无浏览器；网关需飞牛登录态）。
 
 ## 6. 证据与产物
 
 - 分支：`refactor/embedded-gateway`（已推送；PR 创建受限于当前 GitHub token 只读，
   手动入口：`https://github.com/sfy2022/fnos-hermes-desktop/pull/new/refactor/embedded-gateway`）
-- 构建：`/tmp/hermes-build/*.fpk`（e5）
-- 日志：`/tmp/makefpk.log`、`/tmp/hermes-tests.log`
+- 构建：`/tmp/hermes-build/hermes-desktop.fpk`（0.22.6，已安装到 e5）、
+  `/tmp/hermes-build/upgrade-out/hermes-desktop.fpk`（0.22.13，门禁通过，未升级）
+- 日志：`/tmp/makefpk3.log`、`/tmp/hermes-tests.log`、`/tmp/install.log`、
+  `/vol1/@appdata/hermes-desktop/{info.log,logs/gateway.log,gateway-adapter.log}`
 
 ## 7. 未验证/风险
 
-- 浏览器内真实 iframe 渲染（e5 无浏览器；CSP 头与 WS 已由 curl/脚本验证）。
+- 浏览器内真实 iframe 渲染（e5 无浏览器；CSP 头、登录跳转、Cookie Path、WS 101 已由 curl/脚本验证）。
 - 内嵌仍需 Hermes 自身登录一次；不做飞牛 SSO。
+- 飞牛网关 `:5666` 需要飞牛登录态，团队无法在无浏览器环境完成；网关 WS 透传假设已由
+  fnOS 官方文档与 fnos-dsh 实现佐证，待用户浏览器最终确认。
 - 上游升级若再次调整 CSP/前缀行为，需按 `docs/EMBEDDING.md` 回归。
+- `appcenter-cli` 不支持 CLI 升级（提示从 Web UI 操作），升级/卸载路径待 UI 验收。
 - Windows 构建的 `libatomic`/Node 26 问题只影响本地构建机，不影响 fnOS 运行。
