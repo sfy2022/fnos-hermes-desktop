@@ -96,12 +96,24 @@
 
 ## 6. 证据与产物
 
-- 分支：`refactor/embedded-gateway`（已推送；PR 创建受限于当前 GitHub token 只读，
-  手动入口：`https://github.com/sfy2022/fnos-hermes-desktop/pull/new/refactor/embedded-gateway`）
+- 分支：`refactor/embedded-gateway`（已推送，最新 `c66ee32`）
+- CI：`.github/workflows/test.yml` 在分支上连续通过
+  （例：run `41666246054`、`41666044281`、`41664090763`、`41662809087`、`41658183003`、`41657585799`）
 - 构建：`/tmp/hermes-build/hermes-desktop.fpk`（0.22.6，已安装到 e5）、
   `/tmp/hermes-build/upgrade-out/hermes-desktop.fpk`（0.22.13，门禁通过，未升级）
 - 日志：`/tmp/makefpk3.log`、`/tmp/hermes-tests.log`、`/tmp/install.log`、
   `/vol1/@appdata/hermes-desktop/{info.log,logs/gateway.log,gateway-adapter.log}`
+
+### 6.1 PR 创建状态
+
+- 当前 GitHub MCP token 只有只读权限：
+  `create_branch` / `create_pull_request` 均返回 `403 Resource not accessible by personal access token`。
+- 分支已通过本地 GitHub SSH key 推送成功；曾尝试借 Actions `GITHUB_TOKEN` 自动建 PR
+  （临时 `open-pr.yml`），工作流失败（仓库未允许 Actions 创建 PR），临时文件已删除。
+- 手动创建入口：
+  `https://github.com/sfy2022/fnos-hermes-desktop/pull/new/refactor/embedded-gateway`
+- 需要用户：点上述链接创建 PR；若希望自动化，请提供具备 `contents:write` + `pull_requests:write`
+  的 token，或在仓库 Settings → Actions 允许创建 PR。
 
 ## 7. 未验证/风险
 
