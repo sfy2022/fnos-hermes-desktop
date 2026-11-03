@@ -282,7 +282,7 @@ apply_model_config() {
         return 0
     fi
 
-    local helper="${TRIM_APPDEST}/cmd/apply_model_config.py"
+    local helper="$(dirname "$0")/apply_model_config.py"
     if [ ! -f "${helper}" ]; then
         log_msg "警告：缺少 ${helper}，模型配置跳过"
         return 0
@@ -502,66 +502,84 @@ install_hermes() {
     esac
     log_msg "PyPI 源：${UV_INDEX_URL}"
 
-    if [ ! -x "${VENV_DIR}/bin/hermes" ]; then
-        log_msg "创建 Python 3.14 虚拟环境 ..."
-        "${UV_BIN}" venv --clear --python 3.14 "${VENV_DIR}" >>"${LOG_FILE}" 2>&1
-        # 兜底：uv 版本过旧不支持 --clear 时，先清掉残留的 venv。
-    # 卸载中断或用户选择保留数据时，venv 目录会残留，
-    # 导致 uv 报 "A directory already exists at .../venv" 安装失败。
-    if [ -d "${VENV_DIR}" ] && [ ! -x "${VENV_DIR}/bin/python3" ]; then
-        log_msg "检测到不完整的 venv 残留，先清理"
-        rm -rf "${VENV_DIR}" 2>/dev/null || true
+    # 判定“已有可用环境”：hermes 可执行且关键运行时依赖能导入。
+    # 旧版本/中断安装可能留下 Python 3.12 + 缺 ruamel/httpx 的残留环境，
+    # 只看 venv/bin/hermes 是否存在会误判为已安装（启动即 ModuleNotFoundError）。
+    local need_install=1
+    if [ -x "${VENV_DIR}/bin/hermes" ] \
+            && "${VENV_DIR}/bin/python3" -c 'import ruamel.yaml, httpx' >/dev/null 2>&1; then
+        need_install=0
+        log_msg "已有可用的 Hermes 环境，跳过重建"
     fi
 
-    if [ ! -x "${VENV_DIR}/bin/python3" ]; then
-            log_msg "Python 3.14 创建失败，回退 3.12"
-            "${UV_BIN}" venv --clear --python 3.12 "${VENV_DIR}" >>"${LOG_FILE}" 2>&1
+    if [ "${need_install}" = "1" ]; then
+        # 先彻底清掉残留 venv：uv --clear 对“不是 venv 的目录”会直接报错。
+        if [ -d "${VENV_DIR}" ]; then
+            log_msg "清理旧/不完整的 venv 残留"
+            rm -rf "${VENV_DIR}" 2>/dev/null || true
+        fi
+
+        log_msg "创建 Python 3.14 虚拟环境 ..."
+        "${UV_BIN}" venv --python 3.14 "${VENV_DIR}" >>"${LOG_FILE}" 2>&1 || true
+        if [ ! -x "${VENV_DIR}/bin/python3" ]; then
+            log_msg "Python 3.14 venv 创建失败，清理后重试一次"
+            rm -rf "${VENV_DIR}" 2>/dev/null || true
+            "${UV_BIN}" venv --python 3.14 "${VENV_DIR}" >>"${LOG_FILE}" 2>&1 || true
         fi
         if [ ! -x "${VENV_DIR}/bin/python3" ]; then
-            toast_err "创建虚拟环境失败：$(tail -3 "${LOG_FILE}" 2>/dev/null)"
+            toast_err "创建 Python 3.14 虚拟环境失败（当前上游要求 3.14）：$(tail -3 "${LOG_FILE}" 2>/dev/null)"
             return 1
         fi
         log_msg "Python 版本：$("${VENV_DIR}/bin/python3" --version 2>&1)"
     fi
 
-    # 优先用官方包管理器 pm 安装。
-    # 为什么不直接用 uv pip install：
-    #   * pm 会按 pm/lock.json 做哈希校验锁定依赖版本
-    #   * pm 在生成的 workspace 里主动剥离 [tool.uv] exclude-newer
-    #     （上游 pm/workspace.py::_without_release_age），因此不需要
-    #     国内镜像提供 upload-time 元数据 —— 这正是原先依赖被全部
-    #     过滤掉的根因（上游 issue #135589）
-    #   * pm 会一并处理可执行入口发布、附加包等收尾工作
-    # NAS 上不需要浏览器与计算机视觉驱动，用 --without 跳过，省空间也省时间。
-    local pm_ok=0
-    if [ -d "${SRC_DIR}/pm" ]; then
-        log_msg "使用官方 pm 安装依赖（跳过 chromium 浏览器与 cua-driver 视觉驱动）..."
-        ( cd "${SRC_DIR}" && "${VENV_DIR}/bin/python3" -m pm.cli install \
-            --without chromium --without cua-driver ) >>"${LOG_FILE}" 2>&1 && pm_ok=1
-        if [ "${pm_ok}" != "1" ]; then
-            log_msg "pm install 未成功，回退 uv（详见 ${LOG_FILE}）"
+    # 依赖缺失时（不管是新建 venv，还是旧 env 被判定不可用）都安装。
+    if ! "${VENV_DIR}/bin/python3" -c 'import ruamel.yaml, httpx' >/dev/null 2>&1; then
+        # 优先用官方包管理器 pm 安装。
+        # 为什么不直接用 uv pip install：
+        #   * pm 会按 pm/lock.json 做哈希校验锁定依赖版本
+        #   * pm 在生成的 workspace 里主动剥离 [tool.uv] exclude-newer
+        #     （上游 pm/workspace.py::_without_release_age），因此不需要
+        #     国内镜像提供 upload-time 元数据 —— 这正是原先依赖被全部
+        #     过滤掉的根因（上游 issue #135589）
+        #   * pm 会一并处理可执行入口发布、附加包等收尾工作
+        # NAS 上不需要浏览器与计算机视觉驱动，用 --without 跳过，省空间也省时间。
+        local pm_ok=0
+        if [ -d "${SRC_DIR}/pm" ]; then
+            log_msg "使用官方 pm 安装依赖（跳过 chromium 浏览器与 cua-driver 视觉驱动）..."
+            ( cd "${SRC_DIR}" && "${VENV_DIR}/bin/python3" -m pm.cli install \
+                --without chromium --without cua-driver ) >>"${LOG_FILE}" 2>&1 && pm_ok=1
+            if [ "${pm_ok}" != "1" ]; then
+                log_msg "pm install 未成功，回退 uv（详见 ${LOG_FILE}）"
+            fi
+        else
+            log_msg "源码中无 pm 模块，回退 uv 安装"
         fi
-    else
-        log_msg "源码中无 pm 模块，回退 uv 安装"
-    fi
 
-    if [ "${pm_ok}" != "1" ]; then
-        # 回退路径：直接用 uv。显式放宽 exclude-newer（uv 默认按自身构建日
-        # 截断，会误伤刚发布的依赖版本），并强制走完整 upload-time 元数据的源。
-        local EXCLUDE="--exclude-newer 2027-01-01"
-        log_msg "editable 安装 hermes-agent[web] ..."
-        ( cd "${SRC_DIR}" && "${UV_BIN}" pip install --python "${VENV_DIR}/bin/python3" \
-            ${EXCLUDE} -e ".[web]" ) >>"${LOG_FILE}" 2>&1
-    fi
+        if [ "${pm_ok}" != "1" ]; then
+            # 回退路径：直接用 uv。显式放宽 exclude-newer（uv 默认按自身构建日
+            # 截断，会误伤刚发布的依赖版本），并强制走完整 upload-time 元数据的源。
+            local EXCLUDE="--exclude-newer 2027-01-01"
+            log_msg "editable 安装 hermes-agent[web] ..."
+            ( cd "${SRC_DIR}" && "${UV_BIN}" pip install --python "${VENV_DIR}/bin/python3" \
+                ${EXCLUDE} -e ".[web]" ) >>"${LOG_FILE}" 2>&1 || true
+        fi
 
-    if [ ! -x "${VENV_DIR}/bin/hermes" ]; then
-        log_msg "web extra 安装失败，尝试 all extra ..."
-        ( cd "${SRC_DIR}" && "${UV_BIN}" pip install --python "${VENV_DIR}/bin/python3" \
-            --exclude-newer 2027-01-01 -e ".[all]" ) >>"${LOG_FILE}" 2>&1
+        if ! "${VENV_DIR}/bin/python3" -c 'import ruamel.yaml, httpx' >/dev/null 2>&1; then
+            log_msg "依赖不完整，安装 hermes-agent[all] ..."
+            ( cd "${SRC_DIR}" && "${UV_BIN}" pip install --python "${VENV_DIR}/bin/python3" \
+                --exclude-newer 2027-01-01 -e ".[all]" ) >>"${LOG_FILE}" 2>&1 || true
+        fi
     fi
 
     if [ ! -x "${VENV_DIR}/bin/hermes" ]; then
         toast_err "hermes-agent 安装失败，请查看 ${LOG_FILE}"
+        return 1
+    fi
+
+    # 关键运行时依赖必须在启动前验证；缺 ruamel/httpx 会直接导致 gateway 崩溃。
+    if ! "${VENV_DIR}/bin/python3" -c 'import ruamel.yaml, httpx' >/dev/null 2>&1; then
+        toast_err "Hermes 依赖不完整（缺少 ruamel.yaml 或 httpx），请重试安装或查看 ${LOG_FILE}"
         return 1
     fi
 

@@ -125,7 +125,7 @@ class ShellContractTests(unittest.TestCase):
     def test_install_callback_applies_model_config(self) -> None:
         install = read("install_callback")
         self.assertIn("apply_model_config", install)
-        self.assertIn("cmd/apply_model_config.py", install)
+        self.assertIn("apply_model_config.py", install)
         self.assertIn("apply_model_config || true", install)
 
     def test_build_only_on_upstream_release(self) -> None:

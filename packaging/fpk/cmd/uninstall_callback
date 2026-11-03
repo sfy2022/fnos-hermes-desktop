@@ -108,12 +108,24 @@ stop_app_processes() {
         rm -f "${PID_FILE}" 2>/dev/null || true
     fi
 
-    # 3) 兜底：按本应用路径匹配
+    # 3) 兜底：按本应用路径匹配（包括 gateway daemon）
     pkill -TERM -f "${TRIM_PKGVAR}/venv/bin" 2>/dev/null || true
     pkill -TERM -f "${TRIM_PKGVAR}.*gateway" 2>/dev/null || true
+    pkill -TERM -f "${TRIM_PKGVAR}" 2>/dev/null || true
+    if [ -f "${LOG_DIR}/gateway.pid" ]; then
+        local gpid
+        gpid="$(head -n 1 "${LOG_DIR}/gateway.pid" 2>/dev/null | tr -cd '0-9')"
+        [ -n "${gpid}" ] && kill -TERM "${gpid}" 2>/dev/null || true
+    fi
     sleep 2
     pkill -KILL -f "${TRIM_PKGVAR}/venv/bin" 2>/dev/null || true
     pkill -KILL -f "${TRIM_PKGVAR}.*gateway" 2>/dev/null || true
+    pkill -KILL -f "${TRIM_PKGVAR}" 2>/dev/null || true
+    if [ -f "${LOG_DIR}/gateway.pid" ]; then
+        local gpid2
+        gpid2="$(head -n 1 "${LOG_DIR}/gateway.pid" 2>/dev/null | tr -cd '0-9')"
+        [ -n "${gpid2}" ] && kill -KILL "${gpid2}" 2>/dev/null || true
+    fi
 }
 
 # 把要删的数据先归档一份到存储卷根目录（etc + var + home）。
@@ -164,10 +176,14 @@ delete_data() {
     # 从 / 执行删除：如果 shell 的 cwd 恰好在 var 里，rm 无法删除 cwd 本身，
     # 会留下空目录；切到 / 后重试。
     cd / 2>/dev/null || true
+    chmod -R u+rwX "${TRIM_PKGVAR}" 2>/dev/null || true
     if [ -d "${TRIM_PKGVAR}" ]; then
         rm -rf "${TRIM_PKGVAR}" 2>/dev/null || true
     fi
     if [ -e "${TRIM_PKGVAR}" ]; then
+        # 还有进程占用时先杀掉（gateway daemon 可能不在 venv/bin 前缀里）
+        pkill -KILL -f "${TRIM_PKGVAR}" 2>/dev/null || true
+        sleep 1
         find "${TRIM_PKGVAR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
         rmdir "${TRIM_PKGVAR}" 2>/dev/null || true
     fi

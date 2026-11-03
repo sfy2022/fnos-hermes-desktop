@@ -136,6 +136,25 @@
 - **应用数据目录权限**：`@appdata` 之前是 700，应用中心/管理端看不到内容；改为 770
   （与其它 fnOS 应用一致），运行时 `ensure_home_layout` 也会自愈。
 
+### 4.5 0.22.18 安装失败修复（手工构建）
+
+0.22.17 在“先卸载 0.22.16 再装”的场景下启动失败，`info.log` 显示
+`ModuleNotFoundError: No module named 'ruamel'` / `httpx`。根因：
+
+- 卸载后数据目录残留了不完整的 venv；`uv venv --clear` 对非 venv 目录报错，
+  旧逻辑清理后**没有重试 3.14**，直接回退 3.12；
+- 上游 `ruamel.yaml` / `httpx` 依赖带 `python_version >= '3.14'` 标记，
+  3.12 环境不会安装它们，但源码无条件 import；
+- 安装校验只看 `venv/bin/hermes` 是否存在，未检查关键依赖。
+
+修复（0.22.18）：
+
+- 安装前清理残留 venv，重试 Python 3.14（不再回退 3.12）；
+- 安装前后校验 `ruamel.yaml` + `httpx`，缺失则重装并最终失败并提示；
+- 安装模型配置 helper 路径改为 `$(dirname "$0")/apply_model_config.py`；
+- 0.22.18 产物：`dist/Hermes-Desktop-fnOS-v0.22.18-0f700158.fpk`，
+  22,663,498 字节，SHA256 `78e28d80a0c9b2a761856ab937bc91174756f9cb2bdf63905e063cafb2b80ca7`。
+
 ## 5. 真机安装与内嵌验收（e5）
 
 在 e5 上安装本仓库重构包（`0.22.6`，含新 adapter/main/布局），`appcenter-cli` 安装成功、应用 running：
@@ -188,7 +207,7 @@
 - 分支：`refactor/embedded-gateway`（已推送，HEAD 见 GitHub）
 - CI：`.github/workflows/test.yml` 在分支上连续通过
   （例：run `41666246054`、`41666044281`、`41664090763`、`41662809087`、`41658183003`、`41657585799`）
-- 官方构建：`dist/Hermes-Desktop-fnOS-v0.22.16-fd267bb3.fpk`（0.22.16）与 `dist/Hermes-Desktop-fnOS-v0.22.17-fd267bb3.fpk`（0.22.17 真机修复）
+- 官方构建：`dist/Hermes-Desktop-fnOS-v0.22.16-fd267bb3.fpk`（0.22.16）与 `dist/Hermes-Desktop-fnOS-v0.22.17-fd267bb3.fpk`（0.22.17 真机修复）与 `dist/Hermes-Desktop-fnOS-v0.22.18-0f700158.fpk`（0.22.18 安装修复）
 - 早期测试：`/tmp/hermes-build/hermes-desktop.fpk`（0.22.6，已安装到 e5）
 - 日志：`/tmp/official-build-0.22.16.log`、`/tmp/hermes-tests.log`、`/tmp/hermes-desktop-uninstall.log`、
   `/vol1/@appdata/hermes-desktop/{info.log,logs/gateway.log,gateway-adapter.log}`
