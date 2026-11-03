@@ -2,7 +2,7 @@
 
 > 环境：fnOS / x86_64 / N5095 ｜ 2026-11-02
 > 目标：NAS 上像本地一样用 Hermes Desktop，且**不改一行官方代码**
-> 状态：**网页入口可用**；**桌面内嵌为实验性**（依赖飞牛网关透传 WebSocket）
+> 状态：**桌面内嵌已验证**（薄适配层，2026-11-04）；浏览器直连保留为排障/备用入口
 >
 > **2026-11-03 更新**：根因已定位为上游 Webapp 的 CSP `frame-ancestors 'none'`（浏览器拒绝 iframe），
 > 不是网关 WebSocket。现改为薄适配层 + 上游原生 `X-Forwarded-Prefix`，仅放宽该 CSP 指令为 `'self'`；
@@ -289,9 +289,9 @@ dashboard:
 
 ## 六、已知限制
 
-**桌面内嵌**要真正可用，需同时满足：网关透传 `Upgrade: websocket`、代理层把路由挂到
-子路径（已解决）、WS 端点凭证在子路径下仍有效。第 1、3 项取决于飞牛网关实现，本项目
-无法控制。提示 `Desktop IPC bridge is unavailable` 时**改用网页入口**。
+**桌面内嵌**已由薄适配层打通（`frame-ancestors 'self'` + `X-Forwarded-Prefix` + WS 透传），
+e5 真机验证登录/Cookie/WS 101 通过；仍需 Hermes 自身登录一次（未做飞牛 SSO）。
+桌面只保留「Hermes」一个内嵌图标；浏览器直连 `http://<NAS_IP>:9120` 不建图标，仅作备用入口。
 
 **相比 Electron 少了**：系统托盘 / 原生通知、原生文件选择器路径、自动更新、桌面级硬件加速。
 Agent 核心能力（工具调用、代码执行、文件读写、定时任务、多 Profile、技能、MCP、持久记忆）全部保留。
@@ -307,8 +307,8 @@ Agent 核心能力（工具调用、代码执行、文件读写、定时任务�
 | 点启动失败 | `logs/gateway.log` | 缺 `dashboard.basic_auth` |
 | 启动横幅一闪而过 | `find $DATA_DIR ! -user hermes-desktop` | 数据目录属主污染 |
 | 9120 不监听 | `grep -A3 '^webapp:' config.yaml` | 端口漂移 / 绑定地址与认证不匹配 |
-| 网页入口 502 | `ss -ltn \| grep 9120` | 上游未启动 |
-| 内嵌空白/转圈 | 适配层 `gateway-proxy.log` | 302 死循环（`sign_in` 未识别） |
+| 浏览器直连 502 | `ss -ltn \| grep 9120` | 上游未启动 |
+| 内嵌白屏/刷新后空白 | 浏览器 Network 看 `/app/assets/...` | 入口 URL 缺尾斜杠 |
 | 内嵌提示 IPC bridge | 浏览器 Network 看 WS | 网关未透传 Upgrade |
 | 登录后跳飞牛桌面 | 页面里搜 `__HERMES_BASE_PATH__` | 未被改写 |
 | 安装报 venv 已存在 | — | 卸载残留，`rm -rf venv` 后重装 |

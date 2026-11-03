@@ -282,8 +282,8 @@ curl --unix-socket /var/apps/hermes-desktop/target/app.sock \
 ```
 
 确认 `cmd/main` 已启动 adapter、`gateway.conf` 的 prefix/socket 与
-`app/ui/config` 一致，且飞牛网关透传 `Upgrade: websocket`。仍失败时用网页入口
-（不经过网关），或在 `cmd/main diagnose` 输出中看两级 CSP 对照。
+`app/ui/config` 一致，且飞牛网关透传 `Upgrade: websocket`。仍失败时用浏览器直连
+`http://<NAS_IP>:9120`（不经过网关），或在 `cmd/main diagnose` 输出中看两级 CSP 对照。
 
 ### 内嵌登录后跳到飞牛桌面
 
