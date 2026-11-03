@@ -142,6 +142,10 @@ class ShellContractTests(unittest.TestCase):
             text = read(name)
             self.assertIn("ensure_appshare", text, name)
             self.assertIn("@appshare", text, name)
+            # Editing config must follow the etc -> @appshare symlink; plain sed -i
+            # replaces the symlink with a regular file and splits the config.
+            self.assertIn("sed -i --follow-symlinks", text, name)
+            self.assertIn('"${src}" -nt "${dst}"', text, name)
 
     def test_build_only_on_upstream_release(self) -> None:
         workflows = REPO / ".github" / "workflows"

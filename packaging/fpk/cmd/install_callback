@@ -82,6 +82,9 @@ ensure_appshare() {
         if [ -e "${src}" ] && [ ! -L "${src}" ]; then
             if [ ! -e "${dst}" ]; then
                 mv -f "${src}" "${dst}" 2>/dev/null || true
+            elif [ "${src}" -nt "${dst}" ]; then
+                # etc 里的运行期配置更新（如运行期补写认证），以它为准确。
+                mv -f "${src}" "${dst}" 2>/dev/null || true
             else
                 rm -f "${src}" 2>/dev/null || true
             fi
@@ -260,13 +263,13 @@ EOF
         local cfg_port
         cfg_port="$(grep -E "^[[:space:]]*port:[[:space:]]*[0-9]+" "${cfg}" 2>/dev/null | head -n 1 | grep -oE '[0-9]+')"
         if [ -n "${cfg_port}" ] && [ "${cfg_port}" != "${SERVICE_PORT}" ]; then
-            sed -i "s/^\([[:space:]]*port:[[:space:]]*\)[0-9]\{1,5\}/\1${SERVICE_PORT}/" "${cfg}" 2>/dev/null || true
+            sed -i --follow-symlinks "s/^\([[:space:]]*port:[[:space:]]*\)[0-9]\{1,5\}/\1${SERVICE_PORT}/" "${cfg}" 2>/dev/null || true
             log_msg "config.yaml 端口已从 ${cfg_port} 更新为 ${SERVICE_PORT}"
         fi
 
         # public_url：非回环的 public_url 也会触发 gate
         if grep -qE '^[[:space:]]*public_url:[[:space:]]*"?[^"[:space:]]' "${cfg}" 2>/dev/null; then
-            sed -i "s/^\([[:space:]]*public_url:[[:space:]]*\).*/\1\"\"/" "${cfg}" 2>/dev/null || true
+            sed -i --follow-symlinks "s/^\([[:space:]]*public_url:[[:space:]]*\).*/\1\"\"/" "${cfg}" 2>/dev/null || true
             log_msg "config.yaml 的 webapp.public_url 已清空（避免触发认证 gate）"
         fi
 
@@ -304,7 +307,7 @@ EOF
                 log_msg "config.yaml 已补充 dashboard.basic_auth（host=${cur_host} 需要认证）"
             else
                 # 补不上认证就退回回环，至少让应用能起来
-                sed -i "s/^\([[:space:]]*host:[[:space:]]*\).*/\1127.0.0.1/" "${cfg}" 2>/dev/null || true
+                sed -i --follow-symlinks "s/^\([[:space:]]*host:[[:space:]]*\).*/\1127.0.0.1/" "${cfg}" 2>/dev/null || true
                 log_msg "警告：无法生成密码哈希，已回退 host=127.0.0.1（仅本机可访问）"
             fi
         fi
@@ -867,7 +870,7 @@ finalize_webapp_auth() {
 
     if [ "${has_valid_hash}" = "1" ]; then
         # 哈希已存在，只是绑定被回退：直接恢复 0.0.0.0。
-        sed -i "s/^[[:space:]]*host:[[:space:]]*.*/  host: 0.0.0.0/" "${cfg}" 2>/dev/null || true
+        sed -i --follow-symlinks "s/^[[:space:]]*host:[[:space:]]*.*/  host: 0.0.0.0/" "${cfg}" 2>/dev/null || true
         log_msg "已有有效密码哈希，webapp 恢复绑定 0.0.0.0"
         return 0
     fi
@@ -887,13 +890,13 @@ finalize_webapp_auth() {
         return 0
     fi
 
-    sed -i "s/^[[:space:]]*host:[[:space:]]*.*/  host: 0.0.0.0/" "${cfg}" 2>/dev/null || true
+    sed -i --follow-symlinks "s/^[[:space:]]*host:[[:space:]]*.*/  host: 0.0.0.0/" "${cfg}" 2>/dev/null || true
     if grep -qE '^[[:space:]]*basic_auth:' "${cfg}" 2>/dev/null; then
         # 首装可能已经写了空 password_hash；就地补全，避免追加重复 dashboard 段。
         if grep -qE '^[[:space:]]*password_hash:' "${cfg}" 2>/dev/null; then
-            sed -i "s|^\([[:space:]]*password_hash:\).*|\1 \"${hash}\"|" "${cfg}" 2>/dev/null || true
+            sed -i --follow-symlinks "s|^\([[:space:]]*password_hash:\).*|\1 \"${hash}\"|" "${cfg}" 2>/dev/null || true
         else
-            sed -i "/^[[:space:]]*basic_auth:/a\\    password_hash: \"${hash}\"" "${cfg}" 2>/dev/null || true
+            sed -i --follow-symlinks "/^[[:space:]]*basic_auth:/a\\    password_hash: \"${hash}\"" "${cfg}" 2>/dev/null || true
         fi
         log_msg "已补全空的 dashboard.basic_auth 哈希"
     else
