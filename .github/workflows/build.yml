@@ -81,11 +81,18 @@ jobs:
             EXISTING="$(git ls-remote --tags origin 2>/dev/null | sed 's#.*refs/tags/##; s/\^{}//')" || EXISTING=""
             MAXTAG="$(echo "${EXISTING}" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
                       | sed 's/^v//' | sort -V | tail -1)"
+            # 过渡期版本下限：本仓库手工验证过 0.22.21（未发 Release），
+            # 低于它的官方 Release 无法在已安装该版本的设备上升级。
+            FLOOR="$(cat .version-floor 2>/dev/null | tr -d '[:space:]' || true)"
+            if [ -n "${FLOOR}" ]; then
+              MAXTAG="$(printf '%s\n%s\n' "${MAXTAG}" "${FLOOR}" \
+                        | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)"
+            fi
             if [ -n "${MAXTAG}" ]; then
               HIGHEST="$(printf '%s\n%s\n' "${VERSION}" "${MAXTAG}" | sort -V | tail -1)"
               if [ "${HIGHEST}" != "${VERSION}" ]; then
                 SHOULD="false"
-                REASON="上游 ${TAG} 低于本仓库最高 tag v${MAXTAG}，避免 fnOS 降级，跳过"
+                REASON="上游 ${TAG} 低于本仓库版本下限 ${MAXTAG}，避免 fnOS 降级，跳过"
                 echo "::warning::${REASON}"
               fi
             fi
