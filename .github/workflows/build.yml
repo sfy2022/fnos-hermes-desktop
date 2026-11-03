@@ -41,6 +41,7 @@ jobs:
       version: ${{ steps.resolve.outputs.version }}
       sha: ${{ steps.resolve.outputs.sha }}
       should_build: ${{ steps.resolve.outputs.should_build }}
+      reason: ${{ steps.resolve.outputs.reason }}
 
     steps:
       - uses: actions/checkout@v4
@@ -67,9 +68,27 @@ jobs:
 
           RECORDED="$(cat .upstream-release 2>/dev/null || true)"
           SHOULD="true"
+          REASON=""
           if [ "${RECORDED}" = "${TAG}" ] && [ "${FORCE}" != "true" ]; then
             SHOULD="false"
+            REASON="上游 ${TAG} 已构建过（.upstream-release）"
             echo "上游 ${TAG} 已构建过（.upstream-release），跳过。需要重建请勾选 force。"
+          fi
+
+          # 应用版本与上游 Release 完全一致。若本仓库已有更高版本（旧的手工版本），
+          # fnOS 不允许降级安装，跳过并等待上游发布更高版本。
+          if [ "${SHOULD}" = "true" ] && [ "${FORCE}" != "true" ]; then
+            EXISTING="$(git ls-remote --tags origin 2>/dev/null | sed 's#.*refs/tags/##; s/\^{}//')" || EXISTING=""
+            MAXTAG="$(echo "${EXISTING}" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+                      | sed 's/^v//' | sort -V | tail -1)"
+            if [ -n "${MAXTAG}" ]; then
+              HIGHEST="$(printf '%s\n%s\n' "${VERSION}" "${MAXTAG}" | sort -V | tail -1)"
+              if [ "${HIGHEST}" != "${VERSION}" ]; then
+                SHOULD="false"
+                REASON="上游 ${TAG} 低于本仓库最高 tag v${MAXTAG}，避免 fnOS 降级，跳过"
+                echo "::warning::${REASON}"
+              fi
+            fi
           fi
 
           SHA="$(git ls-remote https://github.com/NousResearch/hermes-agent.git \
@@ -80,6 +99,7 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "reason=${REASON}" >> "$GITHUB_OUTPUT"
           echo "should_build=${SHOULD}" >> "$GITHUB_OUTPUT"
           echo "- 上游 Release：**${TAG}**（${SHA}）" >> "$GITHUB_STEP_SUMMARY"
           echo "- 本次构建：**${SHOULD}**" >> "$GITHUB_STEP_SUMMARY"
@@ -125,34 +145,18 @@ jobs:
           echo "date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           echo "upstream tag: ${{ needs.check.outputs.tag }}"
 
-      # fnOS 不允许覆盖安装同版本号，应用版本号必须单调递增。
-      # 以「上游 release 版本」与「本地已有 tag」中较大者为基准，找第一个空位。
-      - name: 计算应用版本
+      # 应用版本 = 上游 Release 版本（不再本地自增）。
+      # 若上游版本低于本仓库已有 tag，check 会跳过构建，避免 fnOS 降级。
+      - name: 应用版本跟随上游 Release
         run: |
-          set -uo pipefail
+          set -euo pipefail
           UP="${{ needs.check.outputs.version }}"
-          EXISTING="$(git ls-remote --tags origin 2>/dev/null | sed 's#.*refs/tags/##; s/\^{}//')" || EXISTING=""
-          MAXTAG="$(echo "${EXISTING}" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-                    | sed 's/^v//' | sort -V | tail -1)"
-          BASE="$(printf '%s\n%s\n' "${UP}" "${MAXTAG}" \
-                  | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)"
-          if [ -z "${BASE}" ]; then
-            echo "::error::既取不到上游版本、也没有可比较的 tag"
-            exit 1
-          fi
-          MAJOR="$(echo "${BASE}" | cut -d. -f1)"
-          MINOR="$(echo "${BASE}" | cut -d. -f2)"
-          PATCH="$(echo "${BASE}" | cut -d. -f3 | tr -cd '0-9')"
-          [ -n "${PATCH}" ] || PATCH=0
-          CAND="${MAJOR}.${MINOR}.${PATCH}"
-          n=0
-          while echo "${EXISTING}" | grep -qx "v${CAND}" && [ "${n}" -lt 500 ]; do
-            PATCH=$((PATCH + 1))
-            CAND="${MAJOR}.${MINOR}.${PATCH}"
-            n=$((n + 1))
-          done
-          echo "APP_VERSION=${CAND}" >> "${GITHUB_ENV}"
-          echo "- 🏷 应用版本：**${CAND}**（上游 ${UP}，已有最高 ${MAXTAG:-无}）" >> "${GITHUB_STEP_SUMMARY}"
+          case "${UP}" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::无法解析上游版本: '${UP}'"; exit 1 ;;
+          esac
+          echo "APP_VERSION=${UP}" >> "${GITHUB_ENV}"
+          echo "- 🏷 应用版本：**${UP}**（与上游 Release 完全一致）" >> "${GITHUB_STEP_SUMMARY}"
 
       - name: 构建 fpk
         env:

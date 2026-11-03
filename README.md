@@ -216,9 +216,11 @@ Hermes 官方桌面端（Electron）的渲染层有两套产物：
 | `sync.yml` | 每 6 小时 / 手动 | 查上游最新 Release tag，与 `.upstream-release` 不同才触发构建 |
 | `build.yml` | `sync.yml` 触发 / 手动 | 按该 **release tag** 构建（不跟 main）→ 打包 fpk → 发 Release → 记录 `.upstream-release` |
 
-应用版本号与上游 Release 无关（上游 0.22.6、本地可能已到 0.22.17）：构建时取「上游 Release 版本」
-与「本地已有 tag」中较大者，再跳过已占用号，保证 fnOS 能升级。需要重建已构建过的 Release 时，
-手动运行 `build.yml`，勾选 `force` 或指定 `upstream_ref`。
+应用版本**与上游 Release 完全一致**（`v0.23.0` → 应用 `0.23.0`），不再本地自增。
+若上游 Release 版本低于本仓库已有 tag（例如手工验证过 `0.22.21` 而上游仍是 `0.22.6`），
+`check` 会跳过构建，避免 fnOS 降级安装；等上游发布更高 Release 时自动对齐。
+当前 `0.22.21` 是本地手工验证包，不是正式 Release；下一次上游 Release 构建的版本号会与官方一致。
+需要重建已构建过的 Release 时，手动运行 `build.yml`，勾选 `force` 或指定 `upstream_ref`。
 
 ### 本地构建
 
