@@ -53,7 +53,8 @@ log "同步上游 ${UPSTREAM_REPO}@${UPSTREAM_REF}"
 if [ -d "${SRC_DIR}/.git" ]; then
   git -C "${SRC_DIR}" -c http.version=HTTP/1.1 fetch --depth 1 origin "${UPSTREAM_REF}" \
     || git -C "${SRC_DIR}" fetch --depth 1 origin "${UPSTREAM_REF}"
-  git -C "${SRC_DIR}" reset --hard "origin/${UPSTREAM_REF}"
+  # 分支与 tag 都用 FETCH_HEAD：tag 没有 origin/<tag> 引用。
+  git -C "${SRC_DIR}" reset --hard FETCH_HEAD
 else
   rm -rf "${SRC_DIR}"
   git -c http.version=HTTP/1.1 clone --depth 1 --branch "${UPSTREAM_REF}" \
@@ -62,10 +63,15 @@ else
       # HTTP/1.1 仍失败时，改走 codeload / 代理源码包
       log "git clone 失败，改用源码包下载"
       mkdir -p "${WORK_DIR}/srcx"
+      if [ "${UPSTREAM_REF#v}" != "${UPSTREAM_REF}" ]; then
+        REF_PATH="refs/tags/${UPSTREAM_REF}"
+      else
+        REF_PATH="refs/heads/${UPSTREAM_REF}"
+      fi
       tgzs=(
-        "https://codeload.github.com/${UPSTREAM_REPO}/tar.gz/refs/heads/${UPSTREAM_REF}"
-        "https://gh-proxy.com/https://github.com/${UPSTREAM_REPO}/archive/refs/heads/${UPSTREAM_REF}.tar.gz"
-        "https://ghproxy.net/https://github.com/${UPSTREAM_REPO}/archive/refs/heads/${UPSTREAM_REF}.tar.gz"
+        "https://codeload.github.com/${UPSTREAM_REPO}/tar.gz/${REF_PATH}"
+        "https://gh-proxy.com/https://github.com/${UPSTREAM_REPO}/archive/${REF_PATH}.tar.gz"
+        "https://ghproxy.net/https://github.com/${UPSTREAM_REPO}/archive/${REF_PATH}.tar.gz"
       )
       ok=0; u=""
       for u in "${tgzs[@]}"; do

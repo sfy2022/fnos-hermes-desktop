@@ -200,6 +200,21 @@ error: Python installation is missing a `_sysconfigdata_` file
 产物：`dist/Hermes-Desktop-fnOS-v0.22.21-ac76ec4f.fpk`，
 22,676,204 字节，SHA256 `f867ccabd134886b850bf94eb9da554aa2564b8fe81d04ed573359f6d37f8007`。
 
+
+### 4.9 0.22.6 官方 Release 同步版
+
+按用户要求构建与官方 Release 完全同版本的包：
+
+- 上游 tag：`v0.22.6`（commit `f0d94882`）
+- 应用版本：`0.22.6`
+- 产物：`dist/Hermes-Desktop-fnOS-v0.22.6-f0d94882.fpk`
+- 大小：23,186,521 字节
+- SHA256：`c3a97095215d7281ee5a3f0aae3093b3ab81bd22e74b857bf64ea538c61fa1f6`
+
+构建时发现 `build.sh` 对 tag 的 fetch 逻辑用了 `origin/<tag>`（tag 没有该引用），已改为
+`reset --hard FETCH_HEAD`，并让 codeload 回退对 tag 使用 `refs/tags/...`。
+版本策略同步调整为：应用版本 = 上游 Release 版本，不再本地自增；旧的 0.22.13~0.22.21
+是本地验证包，不是 Release。
 ## 5. 真机安装与内嵌验收（e5）
 
 在 e5 上安装本仓库重构包（`0.22.6`，含新 adapter/main/布局），`appcenter-cli` 安装成功、应用 running：
