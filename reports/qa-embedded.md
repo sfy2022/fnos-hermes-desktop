@@ -47,10 +47,31 @@
 
 ## 4. FPK 构建
 
-- 因 e5 到 GitHub 的 git clone 极慢（上游仓库约 1.4GB），构建用**当前 release 的
-  `dist-webapp`**（v0.22.12，`app.tgz` / `webapp`）作为渲染层，与本仓库 `packaging/fpk`
-  组装后经 `fnpack 1.2.4` 打包，用于验证适配层/目录/安装链路；生产构建仍走
-  `scripts/build.sh` + CI（Node 26）。
+### 4.1 官方构建（scripts/build.sh，最新上游）
+
+在 e5 上用官方 `scripts/build.sh` 从上游 `main` 正式构建：
+
+| 项 | 值 |
+|---|---|
+| 版本 | **0.22.13** |
+| 上游 | `NousResearch/hermes-agent@74b2ed65`（main） |
+| 产物 | `dist/Hermes-Desktop-fnOS-v0.22.13-74b2ed65.fpk` |
+| 大小 | 22,959,543 字节 |
+| SHA256 | `74d37038a26aaae7ca3e7c590385a306089452b2f29e83cf45f9e52d0dd7e44e` |
+| 构建时门禁 | 布局检查 / 网关契约 / py_compile 均通过（build.sh §3.5） |
+| build-info | `/dist/build-info.json`（`bundle_files: 1079`） |
+
+分支 `.upstream-sha` 已更新为 `74b2ed65e6564bfcafd29236e5fab2447a68fc76`。
+工作区已回传产物：`hermes-src/dist/Hermes-Desktop-fnOS-v0.22.13-74b2ed65.fpk`。
+
+> e5 上当前安装的仍是验证用 `0.22.6` 包；`appcenter-cli` 不允许 CLI 升级，
+> 0.22.13 需在飞牛 Web UI 手动安装（会自动走升级、保留数据）。
+
+### 4.2 早期测试构建
+
+- 因 e5 到 GitHub 的 git clone 极慢（上游仓库约 1.4GB），早期验证用**当前 release 的
+  `dist-webapp`**（v0.22.12）作为渲染层手工组装，用于验证适配层/目录/安装链路；
+  正式产物以上面的 `scripts/build.sh` 构建为准。
 - 组装包通过 `check_fpk_layout.py`（违规 0，仅 `PKG-ARCH-03` 臂警告）、
   `check_gateway_contract.py`（0/0）、`py_compile`。
 - 产物：`/tmp/hermes-build/hermes-desktop.fpk`（约 22MB，manifest `0.22.6`，测试首装）；
