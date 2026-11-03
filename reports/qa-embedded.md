@@ -17,8 +17,8 @@
 
 | 项 | 命令 | 结果 |
 |---|---|---|
-| 单元/集成测试（Windows） | `python -m unittest discover -s tests` | 72 tests OK（12 个 AF_UNIX 用例 skip） |
-| 单元/集成测试（e5 Linux） | `python3 -m unittest discover -s tests` | **72 tests OK（全量，含 AF_UNIX/WS）** |
+| 单元/集成测试（Windows） | `python -m unittest discover -s tests` | 73 tests OK（12 个 AF_UNIX 用例 skip） |
+| 单元/集成测试（e5 Linux） | `python3 -m unittest discover -s tests` | **73 tests OK（全量，含 AF_UNIX/WS）** |
 | 布局检查（源码/模板） | `python3 scripts/check_fpk_layout.py packaging/fpk --template` | exit 0，违规 0；警告：缺 `app/webapp`（构建注入）、含 arm64 二进制 |
 | 网关契约 | `python3 scripts/check_gateway_contract.py packaging/fpk` | exit 0，违规/警告 0 |
 | Shell 语法（e5） | `bash -n` 全部 cmd/runtime/scripts | 通过 |
@@ -155,6 +155,21 @@
 - 0.22.18 产物：`dist/Hermes-Desktop-fnOS-v0.22.18-0f700158.fpk`，
   22,663,498 字节，SHA256 `78e28d80a0c9b2a761856ab937bc91174756f9cb2bdf63905e063cafb2b80ca7`。
 
+### 4.6 0.22.19 应用文件入口（data-share）
+
+飞牛文件管理器的「应用文件」只展示 `@appshare/<app>`，并且要求 `config/resource`
+声明 `data-share`。0.22.16~0.18 的 `resource` 是 `{}`，所以看不到 hermes-desktop。
+
+0.22.19：
+
+- `config/resource` 改为：
+  `{"data-share": {"shares": [{"name": "hermes-desktop"}]}}`
+- 安装/启动时创建 `/vol1/@appshare/hermes-desktop`（770），内含 `README.txt` 以及
+  `data`、`config`、`logs`、`workspace` 符号链接；真实数据仍在 `@appdata`/`@appconf`/`@apphome`。
+- 布局检查器允许并校验 `data-share`，其它 resource 仍被拒绝。
+- 产物：`dist/Hermes-Desktop-fnOS-v0.22.19-0f700158.fpk`，
+  22,663,549 字节，SHA256 `e9825fe5ad85af3f7e98384364769656f308ae7a465d7b6f506df96b39ced764`。
+
 ## 5. 真机安装与内嵌验收（e5）
 
 在 e5 上安装本仓库重构包（`0.22.6`，含新 adapter/main/布局），`appcenter-cli` 安装成功、应用 running：
@@ -207,7 +222,7 @@
 - 分支：`refactor/embedded-gateway`（已推送，HEAD 见 GitHub）
 - CI：`.github/workflows/test.yml` 在分支上连续通过
   （例：run `41666246054`、`41666044281`、`41664090763`、`41662809087`、`41658183003`、`41657585799`）
-- 官方构建：`dist/Hermes-Desktop-fnOS-v0.22.16-fd267bb3.fpk`（0.22.16）与 `dist/Hermes-Desktop-fnOS-v0.22.17-fd267bb3.fpk`（0.22.17 真机修复）与 `dist/Hermes-Desktop-fnOS-v0.22.18-0f700158.fpk`（0.22.18 安装修复）
+- 官方构建：`dist/Hermes-Desktop-fnOS-v0.22.16-fd267bb3.fpk`（0.22.16）与 `dist/Hermes-Desktop-fnOS-v0.22.17-fd267bb3.fpk`（0.22.17 真机修复）与 `dist/Hermes-Desktop-fnOS-v0.22.18-0f700158.fpk`（0.22.18 安装修复）、`dist/Hermes-Desktop-fnOS-v0.22.19-0f700158.fpk`（0.22.19 应用文件/data-share）
 - 早期测试：`/tmp/hermes-build/hermes-desktop.fpk`（0.22.6，已安装到 e5）
 - 日志：`/tmp/official-build-0.22.16.log`、`/tmp/hermes-tests.log`、`/tmp/hermes-desktop-uninstall.log`、
   `/vol1/@appdata/hermes-desktop/{info.log,logs/gateway.log,gateway-adapter.log}`

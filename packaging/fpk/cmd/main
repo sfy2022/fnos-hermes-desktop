@@ -31,6 +31,7 @@ DATA_DIR="${TRIM_PKGVAR}"
 ETC_DIR="${TRIM_PKGETC:-$(dirname "${DATA_DIR}")/etc}"
 CONFIG_FILE="${ETC_DIR}/config.yaml"
 ACCESS_INFO="${ETC_DIR}/access-info.txt"
+APPSHARE_DIR="${TRIM_APPSHARE:-/vol1/@appshare/$(basename "${DATA_DIR}")}"
 PID_FILE="${DATA_DIR}/app.pid"
 
 VENV_DIR="${DATA_DIR}/venv"
@@ -176,11 +177,37 @@ status() {
     return 1
 }
 
+# fnOS“应用文件”展示 @appshare/<app>（config/resource 的 data-share）。
+# 安装时通常已建好；这里每次启动补链接，保证用户能看到入口。
+ensure_appshare() {
+    local share="${APPSHARE_DIR}"
+    mkdir -p "${share}" 2>/dev/null || return 0
+    chmod 770 "${share}" 2>/dev/null || true
+    ln -sfn "${DATA_DIR}" "${share}/data" 2>/dev/null || true
+    ln -sfn "${ETC_DIR}" "${share}/config" 2>/dev/null || true
+    ln -sfn "${DATA_DIR}/logs" "${share}/logs" 2>/dev/null || true
+    ln -sfn "${DATA_DIR}/workspace" "${share}/workspace" 2>/dev/null || true
+    if [ ! -f "${share}/README.txt" ]; then
+        cat > "${share}/README.txt" <<EOF
+Hermes Desktop 应用文件
+=======================
+- data/     -> ${DATA_DIR}
+- config/   -> ${ETC_DIR}
+- logs/     -> ${DATA_DIR}/logs
+- workspace/-> ${DATA_DIR}/workspace
+
+这里只是用户可见入口，真实数据在飞牛标准目录；请在应用中心卸载。
+EOF
+        chmod 644 "${share}/README.txt" 2>/dev/null || true
+    fi
+}
+
 # etc / var 布局自愈：配置只放 etc，var 里用符号链接指回去（contract §3.2）。
 ensure_home_layout() {
     mkdir -p "${DATA_DIR}" "${ETC_DIR}" 2>/dev/null || true
     # 与 fnOS 其它应用一致；700 会让应用中心的“应用数据”入口看不到目录内容。
     chmod 770 "${DATA_DIR}" 2>/dev/null || true
+    ensure_appshare
 
     # 旧布局迁移：var/config.yaml → etc/config.yaml，var 留符号链接。
     if [ -f "${DATA_DIR}/config.yaml" ] && [ ! -L "${DATA_DIR}/config.yaml" ]; then

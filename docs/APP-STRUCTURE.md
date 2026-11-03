@@ -105,7 +105,7 @@ packaging/fpk/
 | [应用框架 framework](https://developer.fnnas.com/docs/core-concepts/framework/) | 安装后在 `/var/apps/{appname}` 创建 `target`/`etc`/`var`/`tmp`/`home`/`shares` 等目录；`cmd/` 九个生命周期脚本语义与 `main` 退出码 0/3/1 | §5 运行期布局；`cmd/main` 三态契约 |
 | [manifest](https://developer.fnnas.com/docs/core-concepts/manifest/) | `appname/version/display_name/desc/source`；`platform` 枚举；`desktop_uidir` 默认 `ui`；`desktop_applaunchname` 必须与入口 ID 一致；`service_port`/`checkport`/`ctl_stop` 语义 | §4.1 冻结值 |
 | [应用权限 privilege](https://developer.fnnas.com/docs/core-concepts/privilege/) | 默认最小权限 `run-as=package`；root 仅限特权准备；用户文件需授权目录或资源声明 | §4.2（已符合） |
-| [应用资源 resource](https://developer.fnnas.com/docs/core-concepts/resource/) | 只声明实际使用的能力；`data-share` 使用 Windows ACL 模型，系统自动授权运行用户 | §4.3（目标 `{}`） |
+| [应用资源 resource](https://developer.fnnas.com/docs/core-concepts/resource/) | 只声明实际使用的能力；`data-share` 使用 Windows ACL 模型，系统自动授权运行用户 | §4.3（只声明 `data-share`） |
 | [用户向导 wizard](https://developer.fnnas.com/docs/core-concepts/wizard/) | 文件为 JSON 数组；`field` 即环境变量名；自定义字段不得用 `TRIM_` 前缀；密钥用 `password` 且不得写日志 | §4.5 |
 | [环境变量](https://developer.fnnas.com/docs/core-concepts/environment-variables/) | `TRIM_APPDEST/PKGETC/PKGVAR/PKGTMP/PKGHOME` 等路径变量；失败写 `TRIM_TEMP_LOGFILE` | §5 全部路径推导 |
 
@@ -146,11 +146,15 @@ packaging/fpk/
 
 ### 4.3 `config/resource`
 
-目标：`{}`。
+目标：只声明 `data-share`，让飞牛文件管理的「应用文件」出现 `hermes-desktop` 入口。
 
-- **当前已为 `{}`**（2026-11-03 实测；此前声明的两个 `data-share` 已按契约 §4 移除）。
-- 若后续代码确实需要共享目录：只保留**最小**声明（`name` 用 `hermes-desktop/...`，权限按需），并回填本文档用途说明。
-- 判定依据：`grep -rn "TRIM_DATA_SHARE_PATHS\|/share/" packaging/fpk/`（无命中即无需 `data-share`）。
+- 当前声明：
+  ```json
+  {"data-share": {"shares": [{"name": "hermes-desktop"}]}}
+  ```
+- 安装/启动时创建 `/vol1/@appshare/hermes-desktop`（770），内含 `README.txt` 及
+  `data`、`config`、`logs`、`workspace` 符号链接；真实数据仍在 `@appdata` / `@appconf` / `@apphome`。
+- 不再声明其它 resource（网关/Docker 等）。
 
 ### 4.4 图标
 
@@ -214,7 +218,7 @@ socket_name=app.sock
 ├── home/                         # → /vol{n}/@apphome/hermes-desktop（HOME=TRIM_PKGHOME）
 │   └── .config/trim-cli/         # trim-cli OAuth 凭据
 ├── tmp/                          # → /vol{n}/@apptemp/hermes-desktop
-└── shares/                       # resource 不声明 data-share 时为空
+└── shares/                       # 应用文件共享（对应 @appshare）
 ```
 
 ### 5.1 两个 socket 不要混淆
@@ -255,7 +259,7 @@ socket_name=app.sock
 | 6 | `manifest.micro_app` | 移除 | ✅ 已移除 |
 | 7 | `manifest.version` | 构建注入（契约示例 `0.22.13`） | ⏳ 源文件仍 `0.22.6`，由 `build.sh` 的 `APP_VERSION` 覆盖 |
 | 8 | `manifest.os_min_version` | 不写（待真机） | ✅ 未写 |
-| 9 | `config/resource` | `{}` | ✅ 已为 `{}` |
+| 9 | `config/resource` | 仅 `data-share` | ✅ 已声明 `hermes-desktop` 应用文件 |
 | 10 | 配置落点 | `config.yaml`/`access-info.txt` 写 `TRIM_PKGETC` | ✅ etc 实体 + `var/config.yaml -> ../etc/config.yaml`；install/main/upgrade 均迁移 |
 | 11 | `access-info.txt` | `etc/`（0600） | ✅ 已写 etc 0600 |
 | 12 | `app/ui/config` | 单内嵌入口（title=Hermes）、网关字段一致 | ✅ 一致（布局/契约检查器校验；`accessPerm=readonly`） |
@@ -264,7 +268,7 @@ socket_name=app.sock
 | 15 | 检查脚本 | `check_fpk_layout.py` + `check_gateway_contract.py` | ✅ 均已交付；模板/组装模式均 exit 0 |
 | 16 | `build.sh` 门禁 | `py_compile` + 两道 `run_gate` | ✅ 已加，当前树可过 |
 | 17 | 包根整洁 | 仅白名单条目 | ✅ 合规 |
-| 18 | 单测 | `tests/` 可跑 | ✅ 72 项（Windows 12 个 AF_UNIX skip；e5 全量 OK） |
+| 18 | 单测 | `tests/` 可跑 | ✅ 73 项（Windows 12 个 AF_UNIX skip；e5 全量 OK） |
 
 ### 6.2 剩余迁移步骤（在 e5 上执行，命令可复制）
 

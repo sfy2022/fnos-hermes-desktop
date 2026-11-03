@@ -128,6 +128,21 @@ class ShellContractTests(unittest.TestCase):
         self.assertIn("apply_model_config.py", install)
         self.assertIn("apply_model_config || true", install)
 
+    def test_appshare_is_declared(self) -> None:
+        import json
+
+        resource = json.loads(
+            (REPO / "packaging" / "fpk" / "config" / "resource").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            resource,
+            {"data-share": {"shares": [{"name": "hermes-desktop"}]}},
+        )
+        for name in ("install_callback", "main"):
+            text = read(name)
+            self.assertIn("ensure_appshare", text, name)
+            self.assertIn("@appshare", text, name)
+
     def test_build_only_on_upstream_release(self) -> None:
         workflows = REPO / ".github" / "workflows"
         build = (workflows / "build.yml").read_text(encoding="utf-8")

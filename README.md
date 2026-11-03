@@ -25,12 +25,13 @@
    浏览器直连不建图标：直接访问 `http://<NAS_IP>:9120`（应用介绍里也会提示该端口）。
 
 > **应用数据位置**（飞牛官方目录规范）：
+> - 应用文件（文件管理 → 应用文件，用户可见）：`/vol1/@appshare/hermes-desktop`
 > - 数据（会话、venv、日志）：`/vol1/@appdata/hermes-desktop`
 > - 配置（`config.yaml`、`access-info.txt`）：`/vol1/@appconf/hermes-desktop`
 > - HOME：`/vol1/@apphome/hermes-desktop`
 >
-> 应用中心「应用数据」打开的是 `@appdata` 目录；数据目录权限为 770（与其它飞牛应用一致），
-> 如通过 SMB/文件管理器看不到，先确认当前账号有访问权限。
+> 「应用文件」里的 `data`/`config`/`logs`/`workspace` 是指向真实目录的入口；
+> 真实数据仍在 fnOS 标准目录，避免把密钥/运行环境直接暴露到共享目录。
 
 > 下载慢或失败多半是国内访问 GitHub 大文件 CDN 的问题，挂代理更稳。
 

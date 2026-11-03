@@ -18,6 +18,7 @@ DATA_DIR="${TRIM_PKGVAR}"
 ETC_DIR="${TRIM_PKGETC:-$(dirname "${DATA_DIR}")/etc}"
 CONFIG_FILE="${ETC_DIR}/config.yaml"
 ACCESS_INFO="${ETC_DIR}/access-info.txt"
+APPSHARE_DIR="${TRIM_APPSHARE:-/vol1/@appshare/$(basename "${DATA_DIR}")}"
 GATEWAY_CONF_SRC="${TRIM_APPDEST}/runtime/gateway/gateway.conf"
 GATEWAY_CONF_ETC="${ETC_DIR}/gateway.conf"
 VENV_DIR="${DATA_DIR}/venv"
@@ -56,12 +57,49 @@ gen_password() {
 }
 
 # ── etc / var 布局准备（REFACTOR-CONTRACT §3.2） ─────────────────────────
+# fnOS 的“应用文件”只展示 @appshare/<app>（由 config/resource 的 data-share 声明）。
+# 在这里建一个用户可见入口：README + 指向内部数据/配置的符号链接。
+ensure_appshare() {
+    local share="${APPSHARE_DIR}"
+    local uid gid
+    if ! mkdir -p "${share}" 2>/dev/null; then
+        log_msg "提示：无法创建 ${share}（父目录通常仅 root 可写），应用文件入口可能不显示"
+        return 0
+    fi
+    chmod 770 "${share}" 2>/dev/null || true
+    uid="$(stat -c '%u' "${DATA_DIR}" 2>/dev/null || true)"
+    gid="$(stat -c '%g' "${DATA_DIR}" 2>/dev/null || true)"
+    if [ "$(id -u)" = "0" ] && [ -n "${uid}" ] && [ -n "${gid}" ]; then
+        chown "${uid}:${gid}" "${share}" 2>/dev/null || true
+    fi
+
+    ln -sfn "${DATA_DIR}" "${share}/data" 2>/dev/null || true
+    ln -sfn "${ETC_DIR}" "${share}/config" 2>/dev/null || true
+    ln -sfn "${DATA_DIR}/logs" "${share}/logs" 2>/dev/null || true
+    ln -sfn "${DATA_DIR}/workspace" "${share}/workspace" 2>/dev/null || true
+    cat > "${share}/README.txt" <<EOF
+Hermes Desktop 应用文件
+=======================
+这里只是用户可见入口，真实数据仍在飞牛标准目录：
+
+- data/     -> ${DATA_DIR}
+- config/   -> ${ETC_DIR}（config.yaml、access-info.txt）
+- logs/     -> ${DATA_DIR}/logs
+- workspace/-> ${DATA_DIR}/workspace
+
+请勿直接删除 venv/src 等目录；卸载请在应用中心操作。
+EOF
+    chmod 644 "${share}/README.txt" 2>/dev/null || true
+    log_msg "应用文件入口已就绪：${share}"
+}
+
 # 配置实体只放 etc（TRIM_PKGETC，0600）；var 只放运行数据，
 # var/config.yaml 是指向 etc/config.yaml 的符号链接（fnOS 的 var/etc 不在同一父目录，必须用绝对目标）。
 prepare_layout() {
     mkdir -p "${DATA_DIR}" "${ETC_DIR}" 2>/dev/null || true
     # fnOS 其它应用的数据目录是 770；700 会让应用中心的“应用数据”/管理端看不到内容。
     chmod 770 "${DATA_DIR}" 2>/dev/null || true
+    ensure_appshare
 
     # 旧布局迁移：config.yaml 从 var 移到 etc，var 留符号链接。
     if [ -f "${DATA_DIR}/config.yaml" ] && [ ! -L "${DATA_DIR}/config.yaml" ]; then

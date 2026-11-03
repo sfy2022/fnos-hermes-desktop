@@ -567,13 +567,24 @@ class LayoutChecker:
         if not isinstance(data, dict):
             self.add("PKG-RES-01", f"{rel} 顶层必须是 JSON 对象", rel)
             return
-        if data:
+        unexpected = set(data) - {"data-share"}
+        if unexpected:
             self.add(
                 "PKG-RES-02",
-                f"{rel} 冻结为 {{}}（不声明共享目录/网关/Docker 资源），"
-                "实际声明了: " + ", ".join(sorted(data)),
+                f"{rel} 允许的键只有 data-share，实际声明了: "
+                + ", ".join(sorted(unexpected)),
                 rel,
             )
+        share = data.get("data-share")
+        if share is not None:
+            shares = share.get("shares") if isinstance(share, dict) else None
+            expected = [{"name": APPNAME}]
+            if shares != expected:
+                self.add(
+                    "PKG-RES-03",
+                    f"{rel} 的 data-share.shares 必须为 {expected!r}",
+                    rel,
+                )
 
     # --------------------------------------------------------------- entry
     def check_entry(self) -> None:
