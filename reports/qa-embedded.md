@@ -17,8 +17,8 @@
 
 | 项 | 命令 | 结果 |
 |---|---|---|
-| 单元/集成测试（Windows） | `python -m unittest discover -s tests` | 52 tests OK（12 个 AF_UNIX 用例 skip） |
-| 单元/集成测试（e5 Linux） | `python3 -m unittest discover -s tests` | **52 tests OK（全量，含 AF_UNIX/WS）** |
+| 单元/集成测试（Windows） | `python -m unittest discover -s tests` | 59 tests OK（12 个 AF_UNIX 用例 skip） |
+| 单元/集成测试（e5 Linux） | `python3 -m unittest discover -s tests` | **59 tests OK（全量，含 AF_UNIX/WS）** |
 | 布局检查（源码/模板） | `python3 scripts/check_fpk_layout.py packaging/fpk --template` | exit 0，违规 0；警告：缺 `app/webapp`（构建注入）、含 arm64 二进制 |
 | 网关契约 | `python3 scripts/check_gateway_contract.py packaging/fpk` | exit 0，违规/警告 0 |
 | Shell 语法（e5） | `bash -n` 全部 cmd/runtime/scripts | 通过 |
