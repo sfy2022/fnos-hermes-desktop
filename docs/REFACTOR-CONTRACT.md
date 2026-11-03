@@ -60,9 +60,10 @@ wizard/{install, config, upgrade, uninstall}
 /var/apps/hermes-desktop/
   cmd/ config/ wizard/ manifest ICON*
   target/            # 只读：ui/ webapp/ runtime/ plugins/ skills/
-  etc/               # 0600：config.yaml、access-info.txt、gateway.conf
+  etc/               # 文件 0600、目录 0700：config.yaml、access-info.txt、gateway.conf
   var/               # HERMES_HOME：venv/ src/ logs/ sessions/ state/ cache/
-                     #              gateway.sock app.pid; config.yaml -> ../etc/config.yaml
+                     #              gateway.sock app.pid gateway-adapter.pid gateway-adapter.log
+                     #              config.yaml -> ../etc/config.yaml
   home/              # HOME=TRIM_PKGHOME（.config/trim-cli 等）
   tmp/
   shares/            # resource 不声明 data-share 时为空

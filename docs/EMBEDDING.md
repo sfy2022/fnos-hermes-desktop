@@ -265,7 +265,7 @@ sha256sum /tmp/upstream.html /tmp/adapter.html
 |---|---|---|
 | 1 | WS 单一路径的具体值 | 契约只要求「单一路径」未命名；以上游前端实际连接路径为准，adapter 应可配置或按升级请求原样转发 |
 | 2 | `--health-path` 是否经 fnOS 网关可达 | 当前默认 `/.gateway-health` 落在前缀外，网关只转发前缀路径 → 该端点用于本机/套接字排障 |
-| 3 | 内嵌入口何时从「实验性」转正 | 取决于真机验收（CSP/WS/登录循环三项全绿）；未验收前保留「网页入口推荐」的产品措辞 |
+| 3 | 内嵌入口何时从「实验性」转正 | 代码已就绪；待 e5 真机验收（CSP/WS/登录循环三项全绿）后更新产品措辞 |
 | 4 | 上游换 commit 后 CSP/前缀行为是否稳定 | 以 `hermes_cli/webapp_page_policy.py` 为准；升级上游时重跑 §6 的 1/2/6 三项检查 |
-| 5 | adapter PID 文件命名 | 契约未冻结（见 APP-STRUCTURE §8），实现前需 Lead 更新契约 |
-| 6 | adapter `--log-file` | 契约 §5 可选参数，当前实现未提供；补齐前以 `cmd/main` 重定向为准 |
+| 5 | adapter PID/日志文件命名 | 已冻结：`var/gateway-adapter.pid`、`var/gateway-adapter.log` |
+| 6 | adapter `--log-file` | 已实现（可选参数；`cmd/main` 仍重定向到 `var/gateway-adapter.log`） |

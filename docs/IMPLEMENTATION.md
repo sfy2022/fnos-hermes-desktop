@@ -3,6 +3,11 @@
 > 环境：fnOS / x86_64 / N5095 ｜ 2026-11-02
 > 目标：NAS 上像本地一样用 Hermes Desktop，且**不改一行官方代码**
 > 状态：**网页入口可用**；**桌面内嵌为实验性**（依赖飞牛网关透传 WebSocket）
+>
+> **2026-11-03 更新**：根因已定位为上游 Webapp 的 CSP `frame-ancestors 'none'`（浏览器拒绝 iframe），
+> 不是网关 WebSocket。现改为薄适配层 + 上游原生 `X-Forwarded-Prefix`，仅放宽该 CSP 指令为 `'self'`；
+> 详见 [EMBEDDING.md](EMBEDDING.md) 与 [APP-STRUCTURE.md](APP-STRUCTURE.md)。
+> 下文中“内嵌=实验性/WS 未透传”的结论保留为历史记录。
 
 ---
 

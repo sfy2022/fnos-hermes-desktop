@@ -238,31 +238,30 @@ socket_name=app.sock
 
 ## 6. 当前 → 目标：偏差与迁移
 
-### 6.1 偏差清单（2026-11-03 22:45 实测状态）
+### 6.1 偏差清单（重构完成后状态）
 
-> 重构正在并行推进，下表「状态」列表示该时刻事实。结构类目标已基本达成，剩余集中三处：
-> **配置落点（etc/var）、`cmd/main` 换用 adapter、构建门禁脚本齐套**。
+> 结构与配置修正已落地；真机安装验收（e5）与默认入口产品选择仍需确认。
 
 | # | 条目 | 目标 | 当前状态 |
 |---|---|---|---|
-| 1 | 旧适配层 | 删除 `gateway_proxy.py`/`fnos_bridge.py` | ✅ 已删除（`cmd/` 仅剩 9 脚本 + `pause_gateway.py`；布局检查器把两者列为禁止项） |
+| 1 | 旧适配层 | 删除 `gateway_proxy.py`/`fnos_bridge.py` | ✅ 已删除（`cmd/` 仅剩 9 脚本 + `pause_gateway.py`） |
 | 2 | 运行时库脚本 | `cmd/libs.sh` → `app/runtime/lib/libs.sh` | ✅ 已迁移 |
 | 3 | 新适配层 | `app/runtime/gateway/{gateway_adapter.py,gateway.conf}` | ✅ 已创建 |
-| 4 | `gateway.conf` 单一来源 | `cmd/main`/adapter/`app/ui/config` 三方一致 | ⏳ 文件已建；`cmd/main` 仍硬编码 `GATEWAY_PREFIX`/`GATEWAY_SOCKET` 常量，待改为读取 |
+| 4 | `gateway.conf` 单一来源 | `cmd/main`/adapter/`app/ui/config` 三方一致 | ✅ `cmd/main` 读取 `gateway.conf`；契约检查 exit 0 |
 | 5 | `manifest.platform` | `x86` | ✅ 已改 |
 | 6 | `manifest.micro_app` | 移除 | ✅ 已移除 |
 | 7 | `manifest.version` | 构建注入（契约示例 `0.22.13`） | ⏳ 源文件仍 `0.22.6`，由 `build.sh` 的 `APP_VERSION` 覆盖 |
 | 8 | `manifest.os_min_version` | 不写（待真机） | ✅ 未写 |
 | 9 | `config/resource` | `{}` | ✅ 已为 `{}` |
-| 10 | 配置落点 | `config.yaml`/`access-info.txt` 写 `TRIM_PKGETC` | ⏳ 仍写 `TRIM_PKGVAR`；仓库内尚无 `TRIM_PKGETC` 引用 |
-| 11 | `access-info.txt` | `etc/`（0600） | ⏳ 仍在 `var/`，随第 10 项一起迁移 |
-| 12 | `app/ui/config` | 双入口、网关字段一致 | ✅ 一致（布局检查器校验；内嵌入口 `accessPerm=readonly`） |
-| 13 | `cmd/main` | 启动 adapter、读 `gateway.conf` | ❌ 仍按旧方案启动**已删除**的 `cmd/gateway_proxy.py`（含 9121 TCP）；不改则 `start` 失败 |
+| 10 | 配置落点 | `config.yaml`/`access-info.txt` 写 `TRIM_PKGETC` | ✅ etc 实体 + `var/config.yaml -> ../etc/config.yaml`；install/main/upgrade 均迁移 |
+| 11 | `access-info.txt` | `etc/`（0600） | ✅ 已写 etc 0600 |
+| 12 | `app/ui/config` | 双入口、网关字段一致 | ✅ 一致（布局/契约检查器校验；内嵌入口 `accessPerm=readonly`） |
+| 13 | `cmd/main` | 启动 adapter、读 `gateway.conf` | ✅ 从 `target/runtime/gateway/` 启动；健康自检；无 9121/launch 死代码 |
 | 14 | `app/webapp/` | 构建注入、不入库 | ✅ 已 gitignore；`build.sh` 每次 `rm -rf` 后复制 |
-| 15 | 检查脚本 | `check_fpk_layout.py` + `check_gateway_contract.py` | ⏳ 前者已交付（对当前源树 `exit 0`：违规 0 / 警告 3，均属模板模式正常）；后者未交付 |
-| 16 | `build.sh` 门禁 | `py_compile` + 两道 `run_gate` | ✅ 已加；⚠️ 因缺 `check_gateway_contract.py`，**当前构建会在第 3.5 步失败（阻塞项）** |
+| 15 | 检查脚本 | `check_fpk_layout.py` + `check_gateway_contract.py` | ✅ 均已交付；模板/组装模式均 exit 0 |
+| 16 | `build.sh` 门禁 | `py_compile` + 两道 `run_gate` | ✅ 已加，当前树可过 |
 | 17 | 包根整洁 | 仅白名单条目 | ✅ 合规 |
-| 18 | 单测 | `tests/` 可跑 | ⏳ `tests/layout` 已可跑（14 项全过）+ `tests/browser/fake-gateway.html`；网关契约相关套件待补 |
+| 18 | 单测 | `tests/` 可跑 | ✅ 52 项（Windows 12 个 AF_UNIX skip；e5 全量 OK） |
 
 ### 6.2 剩余迁移步骤（在 e5 上执行，命令可复制）
 
@@ -363,10 +362,10 @@ find packaging/fpk \( -name '__pycache__' -o -name '*.pyc' -o -name '*.bak' \
 | # | 问题 | 当前处理 |
 |---|---|---|
 | 1 | `os_min_version` 取值 | 不写，真机实测后回填 |
-| 2 | adapter 的 PID 文件名 | 契约只列 `var/app.pid`（Hermes gateway）；adapter 进程 PID 文件命名未冻结，实现前需 Lead 更新契约 |
-| 3 | `var/` 下契约未枚举的运行期目录（`bin/pythons/.uv-cache/lib/workspace/skills/plugins/desktop-plugins`） | 离线布局检查只覆盖**包结构**、不覆盖运行期 `var/`；运行期白名单待真机确认 |
-| 4 | `app/skills/` 内 arm64 `trim-cli` 与 `platform=x86` | 当前保留双架构二进制、只发 x86 包；布局检查器已按 `PKG-ARCH-03` 给出警告。是否移除非 x86 二进制待定 |
-| 5 | `etc/` 的 0600 是否包含子文件与目录本身 | 契约写 `etc/ 0600`；实现上文件 0600、目录 0700 更合理，需 Lead 确认 |
+| 2 | adapter PID/日志文件名 | 已冻结：`var/gateway-adapter.pid`、`var/gateway-adapter.log`（见契约 §3.2） |
+| 3 | `var/` 下契约未枚举的运行期目录（`bin/pythons/.uv-cache/lib/workspace/skills/plugins/desktop-plugins`） | 离线布局检查只覆盖包结构；运行期目录待真机确认 |
+| 4 | `app/skills/` 内 arm64 `trim-cli` 与 `platform=x86` | 保留双架构二进制、只发 x86 包；布局检查器给出 `PKG-ARCH-03` 警告 |
+| 5 | `etc/` 权限 | 已冻结：文件 0600、目录 0700（见契约 §3.2） |
 | 6 | 网页直连入口与内嵌入口的默认打开方式 | 当前 `desktop_applaunchname=hermes-desktop.Application`；是否改为内嵌入口待产品确认 |
-| 7 | adapter 的 `--log-file` | 契约 §5 列为可选参数，当前实现未提供（日志由 `cmd/main` 重定向）；补齐前以重定向为准 |
-| 8 | `check_gateway_contract.py` 未交付 | 它是 `build.sh` 的硬门禁；QA 交付前构建必失败（阻塞项，非文档缺陷） |
+| 7 | adapter `--log-file` | 已实现（可选；`cmd/main` 仍重定向到 `var/gateway-adapter.log`） |
+| 8 | 真机安装/升级验收 | 待 e5 执行（安装、CSP 两级、WS、升级清理） |

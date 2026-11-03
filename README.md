@@ -30,13 +30,15 @@
 
 | 方式 | 地址 | 鉴权 | 适用场景 |
 |---|---|---|---|
-| **网页入口（推荐）** | `http://<NAS_IP>:9120` | Hermes 自身 `basic_auth`，登录一次后浏览器记住 | 手机、平板、其他电脑 |
-| **桌面内嵌（实验性）** | 飞牛统一网关 `/app/hermes-desktop` | 飞牛登录态 | 想在飞牛窗口内使用 |
+| **网页入口** | `http://<NAS_IP>:9120` | Hermes 自身 `basic_auth`，登录一次后浏览器记住 | 手机、平板、其他电脑 |
+| **桌面内嵌** | 飞牛统一网关 `/app/hermes-desktop` | 飞牛登录态 + Hermes 自身登录 | 想在飞牛窗口内使用 |
 
-**内嵌为什么是实验性**：Desktop 工作区依赖一条 WebSocket（前端叫 *Desktop IPC bridge*）
-承载工具调用与流式输出。内嵌入口经飞牛网关代理，需要网关**透传 `Upgrade: websocket`**，
-且会话凭证在子路径下仍然有效 —— 这两点取决于飞牛网关实现，本项目无法完全控制。
-若提示 `Desktop IPC bridge is unavailable`，改用网页入口即可，它不经过网关，功能完整。
+**内嵌如何工作**：飞牛网关把 `/app/hermes-desktop/*` 转发到应用 `target/app.sock`，
+由薄适配层 `app/runtime/gateway/gateway_adapter.py` 剥前缀、注入 `X-Forwarded-Prefix`
+并透传 WebSocket → `127.0.0.1:9120`。上游据此处理资源 URL、登录跳转与 Cookie Path。
+唯一的安全头调整是把页面 CSP 的 `frame-ancestors 'none'` 放宽为 `'self'`（仅网关路径；
+直连 `:9120` 仍保持 `'none'`），响应体不做任何改写。细节与排障见
+[docs/EMBEDDING.md](docs/EMBEDDING.md)。
 
 ---
 
@@ -263,14 +265,23 @@ find /vol1/@appdata/hermes-desktop ! -user hermes-desktop
 
 ### 内嵌窗口提示 `Desktop IPC bridge is unavailable`
 
-WebSocket 没通。内嵌入口经飞牛网关代理，需要网关透传 `Upgrade: websocket`。
-**改用网页入口即可**，它不经过网关。
+WebSocket 没通。先看适配层日志与健康端点：
+
+```bash
+tail -50 /vol1/@appdata/hermes-desktop/logs/gateway-adapter.log
+curl --unix-socket /var/apps/hermes-desktop/target/app.sock \
+  http://localhost/app/hermes-desktop/.gateway-health
+```
+
+确认 `cmd/main` 已启动 adapter、`gateway.conf` 的 prefix/socket 与
+`app/ui/config` 一致，且飞牛网关透传 `Upgrade: websocket`。仍失败时用网页入口
+（不经过网关），或在 `cmd/main diagnose` 输出中看两级 CSP 对照。
 
 ### 内嵌登录后跳到飞牛桌面
 
-Hermes 前端用 `window.__HERMES_BASE_PATH__` 拼所有路由，上游注入的是空串（站点根），
-在网关子路径下会落到 `/` —— 也就是飞牛桌面。本项目在 `rewrite_html` 里改写为网关前缀，
-已修复；若仍出现，检查适配层是否加载了新脚本。
+上游用 `window.__HERMES_BASE_PATH__` 拼路由，并由 `X-Forwarded-Prefix` 注入网关前缀。
+若跳到飞牛桌面，检查适配层是否发送了 `X-Forwarded-Prefix`、页面里该变量是否为
+`/app/hermes-desktop`，以及是否误启用了旧的 HTML 改写/桥接脚本（新版已删除）。
 
 ### 安装时报 `A directory already exists at .../venv`
 

@@ -407,6 +407,8 @@ stop_gateway_adapter() {
 start_process() {
     if status; then
         log_msg "Hermes Desktop 已在运行"
+        # 旧会话可能只启动了 gateway（升级/异常），确保内嵌所需的 adapter 也在。
+        start_gateway_adapter || log_msg "网关适配层未就绪（直连仍可用）"
         return 0
     fi
 
@@ -421,7 +423,7 @@ start_process() {
     fi
 
     ensure_home_layout
-    pick_port
+    pick_port || return 1
     ensure_webapp_config
     heal_fnos_skill || log_msg "飞牛 Skill 补回失败（如需请手动安装官方 fnOS Skill）"
 
