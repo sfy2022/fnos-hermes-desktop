@@ -4,11 +4,7 @@
         "items": [
             {
                 "type": "tips",
-                "helpText": "<b>Hermes Desktop（飞牛版）</b><br>NousResearch 出品的 AI Agent 工作区，完整运行在飞牛 NAS 上。<br><br><b>它是什么</b><br>不是只会聊天的对话框，而是能动手干活的助手：执行命令、读写文件、浏览网页、跑定时任务、管理多个项目。对话流式输出、工具调用可视化、并排预览、Artifacts、多 Profile、技能管理与内置终端栏一应俱全。<br><br><b>打开方式</b><br>· <b>桌面图标「Hermes」</b> —— 飞牛桌面唯一入口，经统一网关内嵌打开<br>· <b>浏览器直连</b> —— 手动访问 <code>http://&lt;NAS_IP&gt;:9120</code>（不占桌面图标）"
-            },
-            {
-                "type": "tips",
-                "helpText": "<br><b>先设一个访问密码</b><br>这个 Agent 登录后<b>可以执行命令、读写文件</b>，等同于给 NAS 开了一个操作入口，所以必须设密码。<br>· 登录一次后浏览器会记住，日常点图标不必反复输入<br>· 留空则自动生成随机强密码，可在应用数据目录的 <code>access-info.txt</code> 查看"
+                "helpText": "<b>Hermes 桌面版</b><br>AI Agent 工作区，装在飞牛 NAS 上。桌面图标「Hermes」打开；直连 <code>http://&lt;NAS_IP&gt;:9120</code>。<br>登录密码用于保护这个可执行命令、读写文件的入口。"
             },
             {
                 "type": "text",
@@ -27,7 +23,7 @@
                 "field": "wizard_web_pass",
                 "label": "访问密码（留空则随机生成）",
                 "initValue": "",
-                "placeholder": "建议至少 12 位，含字母与数字",
+                "placeholder": "留空自动生成，保存在 access-info.txt",
                 "rules": [
                     {
                         "required": false,
@@ -42,7 +38,7 @@
         "items": [
             {
                 "type": "tips",
-                "helpText": "<b>现在配置或稍后再说</b><br>Hermes 需要一个大模型才能对话。这里填好的配置会直接写入应用，装完即可使用，不必再进设置页。<br>· API Key 只保存在 NAS 本机（<code>config.yaml</code> / <code>.env</code>，权限 0600）<br>· 选「稍后配置」也能完成安装，登录后在 Hermes 设置里再填<br><br><b>OpenRouter</b> 一个 Key 可用多家模型，推荐；<b>Anthropic</b> 官方 Claude；<b>DeepSeek</b> 官方 API；<b>自定义</b> 适用于任意 OpenAI 兼容服务（vLLM、Ollama、LM Studio、公司网关等）。"
+                "helpText": "选择模型服务商并填 API Key；也可选「稍后配置」。Key 只存本机（权限 0600），不会写入日志。"
             },
             {
                 "type": "select",
@@ -51,15 +47,15 @@
                 "initValue": "openrouter",
                 "options": [
                     {
-                        "label": "OpenRouter（推荐，一个 Key 用多家模型）",
+                        "label": "OpenRouter（推荐）",
                         "value": "openrouter"
                     },
                     {
-                        "label": "Anthropic 官方（Claude）",
+                        "label": "Anthropic（Claude）",
                         "value": "anthropic"
                     },
                     {
-                        "label": "DeepSeek 官方",
+                        "label": "DeepSeek",
                         "value": "deepseek"
                     },
                     {
@@ -67,7 +63,7 @@
                         "value": "custom"
                     },
                     {
-                        "label": "稍后配置（跳过）",
+                        "label": "稍后配置",
                         "value": "skip"
                     }
                 ]
@@ -81,7 +77,7 @@
                 "rules": [
                     {
                         "required": false,
-                        "message": "留空则跳过模型配置，安装后可在设置里补"
+                        "message": "留空则跳过模型配置"
                     }
                 ]
             },
@@ -90,18 +86,18 @@
                 "field": "wizard_model_name",
                 "label": "模型名称（留空使用推荐默认）",
                 "initValue": "",
-                "placeholder": "例如 anthropic/claude-sonnet-4.5、claude-sonnet-4-5、deepseek-chat"
+                "placeholder": "例如 anthropic/claude-sonnet-4.5"
             },
             {
                 "type": "text",
                 "field": "wizard_model_base_url",
                 "label": "接口地址（仅自定义/DeepSeek 需要）",
                 "initValue": "",
-                "placeholder": "例如 https://api.deepseek.com/v1；OpenRouter/Anthropic 可留空"
+                "placeholder": "例如 https://api.deepseek.com/v1"
             },
             {
                 "type": "tips",
-                "helpText": "<b>默认模型</b><br>OpenRouter → <code>anthropic/claude-sonnet-4.5</code>；Anthropic → <code>claude-sonnet-4-5</code>；DeepSeek → <code>deepseek-chat</code>（接口 <code>https://api.deepseek.com/v1</code>）。<br>自定义服务必须填接口地址和模型名称；若服务不需要鉴权，API Key 可留空。<br>安装后也可在应用数据目录的 <code>etc/config.yaml</code> 修改 <code>model</code> 段，或在 Hermes 设置里切换。"
+                "helpText": "默认：OpenRouter → <code>anthropic/claude-sonnet-4.5</code>；Anthropic → <code>claude-sonnet-4-5</code>；DeepSeek → <code>deepseek-chat</code>。自定义服务需填接口地址与模型名；安装后可在 <code>etc/config.yaml</code> 修改。"
             }
         ]
     },
@@ -110,16 +106,16 @@
         "items": [
             {
                 "type": "tips",
-                "helpText": "首次安装需联网下载 Python 运行时与 Hermes Agent 源码。<br>若你的 NAS 无法直连 GitHub，请选择代理；国内 PyPI 镜像在此场景下可能缺少依赖元数据，选「官方」最稳妥。"
+                "helpText": "首次安装需联网下载 Hermes 源码与依赖。GitHub 不通时选代理；PyPI 优先官方。"
             },
             {
                 "type": "select",
                 "field": "wizard_github_proxy",
-                "label": "GitHub 下载通道（获取 Hermes 源码）",
+                "label": "GitHub 下载通道",
                 "initValue": "auto",
                 "options": [
                     {
-                        "label": "自动探测（推荐，依次尝试多个来源）",
+                        "label": "自动探测（推荐）",
                         "value": "auto"
                     },
                     {
@@ -135,7 +131,7 @@
                         "value": "codeload"
                     },
                     {
-                        "label": "github.com 直连（需要网络通畅）",
+                        "label": "github.com 直连",
                         "value": "direct"
                     }
                 ]
@@ -147,7 +143,7 @@
                 "initValue": "official",
                 "options": [
                     {
-                        "label": "PyPI 官方（元数据完整，推荐）",
+                        "label": "PyPI 官方（推荐）",
                         "value": "official"
                     },
                     {
@@ -162,7 +158,7 @@
             },
             {
                 "type": "tips",
-                "helpText": "<b>飞牛 NAS 技能授权</b><br>安装后 Agent 即可操作本机 fnOS（文件、Docker、应用中心、存储、监控等）。<br><br><b>还需一次授权</b>（OAuth 机制，Agent 不能代你确认）：<br>1. 在 SSH 或终端执行 <code>/var/apps/hermes-desktop/var/skills/fnos-trim/scripts/trim-cli login --no-open</code><br>2. 复制输出的链接到浏览器打开并确认授权<br>3. 把返回的授权码粘贴回命令提示<br><br>详细指引见应用数据目录下的 <code>fnos-skill-setup.txt</code>。"
+                "helpText": "飞牛 NAS 技能安装后需执行一次 <code>trim-cli login --no-open</code> 授权，详见应用数据目录的 <code>fnos-skill-setup.txt</code>。"
             }
         ]
     }

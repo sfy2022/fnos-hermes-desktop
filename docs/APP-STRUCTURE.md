@@ -75,7 +75,7 @@ packaging/fpk/
 | `node_modules/`、`dist/`、`.build/` | ❌ | 构建产物（`dist/` 为输出目录） |
 | `*.bak`、`*.orig`、`*.rej` | ❌ | 编辑残留 |
 | `*.log`、`*.pid`、`*.sock`、`venv/` | ❌ | 运行期产物，绝不入库/入包 |
-| `.gitignore`、`.upstream-sha` | ❌ | 仓库元数据（`.upstream-sha` 仅用于追溯上游 commit） |
+| `.gitignore`、`.upstream-sha`、`.upstream-release` | ❌ | 仓库元数据：`.upstream-sha` 追溯构建的上游 commit；`.upstream-release` 记录已构建的上游 Release tag（只有新 Release 才构建） |
 
 > `app/webapp/` 是**唯一**允许「构建时注入、不提交」的目录：`.gitignore` 已忽略它，`scripts/build.sh` 每次从上游产物复制。
 
@@ -264,7 +264,7 @@ socket_name=app.sock
 | 15 | 检查脚本 | `check_fpk_layout.py` + `check_gateway_contract.py` | ✅ 均已交付；模板/组装模式均 exit 0 |
 | 16 | `build.sh` 门禁 | `py_compile` + 两道 `run_gate` | ✅ 已加，当前树可过 |
 | 17 | 包根整洁 | 仅白名单条目 | ✅ 合规 |
-| 18 | 单测 | `tests/` 可跑 | ✅ 70 项（Windows 12 个 AF_UNIX skip；e5 全量 OK） |
+| 18 | 单测 | `tests/` 可跑 | ✅ 71 项（Windows 12 个 AF_UNIX skip；e5 全量 OK） |
 
 ### 6.2 剩余迁移步骤（在 e5 上执行，命令可复制）
 

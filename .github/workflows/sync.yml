@@ -1,7 +1,7 @@
-name: 检查上游更新
+name: 检查上游新版本
 
-# 轻量任务：只查上游有没有新提交，有才触发完整构建。
-# 与 build.yml 的每日构建互补——这个能更快反映上游变化。
+# 只检查上游有没有发布新的 Release；有新 tag 才触发 build.yml。
+# 不再跟随 main 分支的每一次提交，也不再每日无条件构建。
 on:
   schedule:
     - cron: '23 */6 * * *'
@@ -10,47 +10,47 @@ on:
 
 permissions:
   contents: read
+  actions: write
 
 jobs:
   check:
-    name: 对比上游 commit
+    name: 对比上游 Release
     runs-on: ubuntu-latest
-    outputs:
-      changed: ${{ steps.compare.outputs.changed }}
-      upstream_sha: ${{ steps.compare.outputs.sha }}
 
     steps:
       - name: 检出本仓库
         uses: actions/checkout@v4
+        with:
+          ref: main
 
-      - name: 取上游最新 commit
-        id: compare
+      - name: 取上游最新 Release
+        id: release
         run: |
           set -euo pipefail
-          REMOTE_SHA=$(git ls-remote https://github.com/NousResearch/hermes-agent.git refs/heads/main | cut -f1)
-          echo "上游最新 commit: ${REMOTE_SHA}"
-
-          if [ -f .upstream-sha ]; then
-            KNOWN=$(cat .upstream-sha)
-          else
-            KNOWN=""
-          fi
-          echo "上次构建 commit: ${KNOWN:-<无>}"
-
-          if [ -n "${KNOWN}" ] && [ "${KNOWN}" = "${REMOTE_SHA}" ]; then
+          TAG="$(curl -fsSL --max-time 30 \
+            https://api.github.com/repos/NousResearch/hermes-agent/releases/latest \
+            | python3 -c 'import json,sys;print(json.load(sys.stdin).get("tag_name",""))')"
+          case "${TAG}" in
+            v[0-9]*) ;;
+            *) echo "::error::无法解析上游 Release tag: '${TAG}'"; exit 1 ;;
+          esac
+          RECORDED="$(cat .upstream-release 2>/dev/null || true)"
+          echo "上游最新 Release: ${TAG}"
+          echo "已构建 Release: ${RECORDED:-<无>}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          if [ "${TAG}" = "${RECORDED}" ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
-          echo "sha=${REMOTE_SHA}" >> "$GITHUB_OUTPUT"
 
-      # 平台自适应触发：Gitea 用 dispatch API，GitHub 用 gh CLI
       - name: 触发构建
-        if: steps.compare.outputs.changed == 'true'
+        if: steps.release.outputs.changed == 'true'
         env:
           GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.release.outputs.tag }}
         run: |
           set -euo pipefail
           REPO_FULL="${GITHUB_REPOSITORY:-}"
@@ -58,39 +58,15 @@ jobs:
           REPO_NAME="${REPO_FULL##*/}"
 
           if [ -n "${GITEA_TOKEN}" ]; then
-            echo ">>> Gitea：触发 build.yml"
-            if [ -z "${GITEA_TOKEN}" ]; then
-              echo "缺少 GITEA_TOKEN，无法触发"
-              exit 0
-            fi
+            echo ">>> Gitea：触发 build.yml（upstream_ref=${TAG}）"
             API="${GITHUB_API_URL:-https://<gitea-host>/api/v1}"
-            curl -s -H "Authorization: token ${GITEA_TOKEN}" \
+            BODY="$(python3 -c 'import json,os;print(json.dumps({"ref":"main","inputs":{"upstream_ref":os.environ["TAG"]}}))')"
+            curl -fsS -H "Authorization: token ${GITEA_TOKEN}" \
               -H "Content-Type: application/json" \
               -X POST "${API}/repos/${OWNER}/${REPO_NAME}/actions/workflows/build.yml/dispatches" \
-              -d '{"ref":"main"}' >/dev/null
-            echo "✓ 已触发"
+              -d "${BODY}" >/dev/null
+            echo "已触发"
           else
-            echo ">>> GitHub：触发 build.yml"
-            gh workflow run build.yml --ref main || echo "触发失败（可稍后手动运行）"
+            echo ">>> GitHub：触发 build.yml（upstream_ref=${TAG}）"
+            gh workflow run build.yml --ref main -f "upstream_ref=${TAG}"
           fi
-
-  record:
-    name: 记录本次 commit
-    needs: check
-    if: needs.check.outputs.changed == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: 写入 .upstream-sha
-        uses: actions/checkout@v4
-        with:
-          ref: main
-      - name: 提交
-        run: |
-          echo "${{ needs.check.outputs.upstream_sha }}" > .upstream-sha
-          git config user.name "gitea-actions[bot]"
-          git config user.email "gitea-actions[bot]@users.noreply.github.com"
-          git add .upstream-sha
-          git commit -m "chore: 记录上游 commit ${{ needs.check.outputs.upstream_sha }}" || echo "无变更"
-          git push || echo "推送失败（下次重试）"

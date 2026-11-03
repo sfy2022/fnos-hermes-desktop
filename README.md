@@ -196,16 +196,19 @@ Hermes 官方桌面端（Electron）的渲染层有两套产物：
 
 ## 构建
 
-### 自动构建
+### 自动构建（只跟随上游 Release）
 
-GitHub Actions 自动同步上游并产出 fpk：
+**只有上游 `NousResearch/hermes-agent` 发布新 Release 时才构建**，不再跟随 main 的每次提交，
+也不再每日无条件构建。打包脚本改动只跑 `test.yml`，不会自动发版。
 
 | 工作流 | 触发 | 作用 |
 |---|---|---|
-| `sync.yml` | 每 6 小时 | 对比上游 commit，有变化才触发构建 |
-| `build.yml` | 每日 03:17 / 手动 / 脚本变更 | 克隆上游 → 构建渲染层 → 打包 fpk → 发 Release |
+| `sync.yml` | 每 6 小时 / 手动 | 查上游最新 Release tag，与 `.upstream-release` 不同才触发构建 |
+| `build.yml` | `sync.yml` 触发 / 手动 | 按该 **release tag** 构建（不跟 main）→ 打包 fpk → 发 Release → 记录 `.upstream-release` |
 
-版本号会自动跳过已被占用的号（fnOS 不允许覆盖安装同版本），产物直接出现在 Releases。
+应用版本号与上游 Release 无关（上游 0.22.6、本地可能已到 0.22.17）：构建时取「上游 Release 版本」
+与「本地已有 tag」中较大者，再跳过已占用号，保证 fnOS 能升级。需要重建已构建过的 Release 时，
+手动运行 `build.yml`，勾选 `force` 或指定 `upstream_ref`。
 
 ### 本地构建
 
@@ -219,7 +222,7 @@ bash scripts/build.sh
 可用环境变量：
 
 ```bash
-UPSTREAM_REF=v0.22.5   # 构建指定上游版本
+UPSTREAM_REF=v0.22.6   # 建议用上游 release tag；默认 main 仅用于开发验证
 APP_VERSION=0.23.0     # 覆盖 manifest 版本号（同版本 fnOS 装不上）
 SKIP_BUNDLE=1          # 复用已有渲染层
 OUTPUT_DIR=/path/out   # 指定输出目录

@@ -17,8 +17,8 @@
 
 | 项 | 命令 | 结果 |
 |---|---|---|
-| 单元/集成测试（Windows） | `python -m unittest discover -s tests` | 70 tests OK（12 个 AF_UNIX 用例 skip） |
-| 单元/集成测试（e5 Linux） | `python3 -m unittest discover -s tests` | **70 tests OK（全量，含 AF_UNIX/WS）** |
+| 单元/集成测试（Windows） | `python -m unittest discover -s tests` | 71 tests OK（12 个 AF_UNIX 用例 skip） |
+| 单元/集成测试（e5 Linux） | `python3 -m unittest discover -s tests` | **71 tests OK（全量，含 AF_UNIX/WS）** |
 | 布局检查（源码/模板） | `python3 scripts/check_fpk_layout.py packaging/fpk --template` | exit 0，违规 0；警告：缺 `app/webapp`（构建注入）、含 arm64 二进制 |
 | 网关契约 | `python3 scripts/check_gateway_contract.py packaging/fpk` | exit 0，违规/警告 0 |
 | Shell 语法（e5） | `bash -n` 全部 cmd/runtime/scripts | 通过 |
@@ -103,6 +103,16 @@
      已在 `install_callback` 增加 `finalize_webapp_auth`（装完依赖后补哈希并恢复 `0.0.0.0`），
      并在 `cmd/main` 增加运行期自愈（升级后 start 也会补）。
 
+### 4.3 发布策略（2026-11-04 起）
+
+- `sync.yml` 每 6 小时查上游 `releases/latest`，只有 tag 与 `.upstream-release` 不同才触发 `build.yml`；
+  不再对比 main commit。
+- `build.yml` 已移除 `schedule` 与 `push` 触发，只接受 `sync.yml` 或手动 dispatch；
+  按上游 **release tag** 构建，不跟 main；Release 发布成功后写 `.upstream-release` / `.upstream-sha`。
+- 应用版本号仍按「上游 Release 版本 + 本地 tag」单调递增，保证 fnOS 可升级。
+- 初始 `.upstream-release=v0.22.6`（当前上游最新 Release）；因此向导精简等打包改动**不会自动出新包**，
+  等上游发布下一个 Release 才会构建。
+
 ## 5. 真机安装与内嵌验收（e5）
 
 在 e5 上安装本仓库重构包（`0.22.6`，含新 adapter/main/布局），`appcenter-cli` 安装成功、应用 running：
@@ -148,6 +158,7 @@
 - 浏览器 iframe 实际渲染、fnOS 桌面内嵌窗口未执行（e5 无浏览器；网关需飞牛登录态）。
   用户反馈 0.22.6 测试包内嵌可登录、刷新白屏，已据此修复并构建 0.22.14/0.22.15。
 - 0.22.16 的“模型向导 + 单入口 + 官方图标 + 卸载删除”已做静态/包内容检查，待用户安装后验收。
+- 安装向导文案已精简、向导测试已加入；按新发布策略不自动出新包，待上游下一个 Release 构建时生效。
 
 ## 6. 证据与产物
 

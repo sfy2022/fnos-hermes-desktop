@@ -115,6 +115,22 @@ class ShellContractTests(unittest.TestCase):
         self.assertIn("cmd/apply_model_config.py", install)
         self.assertIn("apply_model_config || true", install)
 
+    def test_build_only_on_upstream_release(self) -> None:
+        workflows = REPO / ".github" / "workflows"
+        build = (workflows / "build.yml").read_text(encoding="utf-8")
+        sync = (workflows / "sync.yml").read_text(encoding="utf-8")
+        # build.yml: manual/sync only; no daily schedule, no push trigger.
+        self.assertNotIn("\n  schedule:", build)
+        self.assertNotIn("\n  push:", build)
+        self.assertIn("workflow_dispatch:", build)
+        self.assertIn("needs.check.outputs.tag", build)
+        self.assertIn(".upstream-release", build)
+        # sync.yml: check the latest Release, not main commit.
+        self.assertIn("releases/latest", sync)
+        self.assertNotIn("refs/heads/main", sync)
+        self.assertIn(".upstream-release", sync)
+        self.assertTrue((REPO / ".upstream-release").is_file())
+
 
 class GatewayConfigContractTests(unittest.TestCase):
     def test_ui_and_conf_agree(self) -> None:
