@@ -15,7 +15,7 @@
             "type": "iframe",
             "gatewayPrefix": "/app/hermes-desktop",
             "gatewaySocket": "app.sock",
-            "url": "/app/hermes-desktop",
+            "url": "/app/hermes-desktop/",
             "allUsers": true,
             "control": {
                 "accessPerm": "readonly"

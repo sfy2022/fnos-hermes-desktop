@@ -53,19 +53,23 @@
 
 | 项 | 值 |
 |---|---|
-| 版本 | **0.22.13** |
-| 上游 | `NousResearch/hermes-agent@74b2ed65`（main） |
-| 产物 | `dist/Hermes-Desktop-fnOS-v0.22.13-74b2ed65.fpk` |
-| 大小 | 22,959,543 字节 |
-| SHA256 | `74d37038a26aaae7ca3e7c590385a306089452b2f29e83cf45f9e52d0dd7e44e` |
+| 版本 | **0.22.14** |
+| 上游 | `NousResearch/hermes-agent@fd267bb3`（main） |
+| 产物 | `dist/Hermes-Desktop-fnOS-v0.22.14-fd267bb3.fpk` |
+| 大小 | 22,951,480 字节 |
+| SHA256 | `9f549725484c09dfa98927a5b4596c3aafbe2d89097d46fb9e6e0843f82ac723` |
 | 构建时门禁 | 布局检查 / 网关契约 / py_compile 均通过（build.sh §3.5） |
 | build-info | `/dist/build-info.json`（`bundle_files: 1079`） |
 
-分支 `.upstream-sha` 已更新为 `74b2ed65e6564bfcafd29236e5fab2447a68fc76`。
-工作区已回传产物：`hermes-src/dist/Hermes-Desktop-fnOS-v0.22.13-74b2ed65.fpk`。
+分支 `.upstream-sha` 已更新为 `fd267bb3242a14c33d4899cffc60ee4be816f14d`。
+工作区已回传产物：`hermes-src/dist/Hermes-Desktop-fnOS-v0.22.14-fd267bb3.fpk`。
 
+> 0.22.14 额外修复：iframe 刷新白屏 —— 裸挂载路径 `/app/hermes-desktop`（无尾斜杠）
+> 会让 `./assets/...` 相对路径解析到 `/app/assets/...` 而 302/404。adapter 现在对裸路径
+> 302 到 `/app/hermes-desktop/`，`app/ui/config` 的 `url` 也改为带尾斜杠。
+>
 > e5 上当前安装的仍是验证用 `0.22.6` 包；`appcenter-cli` 不允许 CLI 升级，
-> 0.22.13 需在飞牛 Web UI 手动安装（会自动走升级、保留数据）。
+> 0.22.14 需在飞牛 Web UI 手动安装（会自动走升级、保留数据）。
 
 ### 4.2 早期测试构建
 
@@ -106,23 +110,30 @@
 2. **首装认证回退**：首装时 venv 未就绪，scrypt 哈希生成失败 → `host=127.0.0.1`。
    已增加 `install_callback.finalize_webapp_auth` 与 `cmd/main` 运行期自愈（从 etc/access-info 取密码补哈希）。
 3. 组装脚本曾把 `__pycache__` 带进包；已在构建脚本用 `PYTHONPYCACHEPREFIX` 并清理。
+4. **iframe 刷新白屏**：Hermes `index.html` 使用相对资源路径 `./assets/...`；
+   裸挂载路径 `/app/hermes-desktop`（无尾斜杠）会让资源解析到 `/app/assets/...`，
+   经 adapter 转发后 302/404，脚本加载失败 → 白屏。已修：
+   - adapter 对裸挂载路径 302 到 `/app/hermes-desktop/`；
+   - `app/ui/config` 的内嵌 `url` 改为带尾斜杠；
+   - 已用新 adapter 在 e5 验证裸路径返回 `302 Location: /app/hermes-desktop/`。
 
 ### 5.2 未执行/未验证
 
 - `appcenter-cli install-fpk` 对已安装应用提示“请从 Web UI 卸载”，**升级路径未执行**；
-  0.22.13 升级包已构建并通过布局/契约门禁，待 UI 或干净设备验证。
-  真机测试使用 0.22.6 包 + 手工修正符号链接，因此 §5.1 的两处修复在真机上是“修复后行为已验证、
+  0.22.14 升级包已构建并通过布局/契约门禁，待 UI 或干净设备验证。
+  真机测试使用 0.22.6 包 + 手工修正符号链接，因此 §5.1 的修复在真机上是“修复后行为已验证、
   修复代码本身待下次全新安装验证”。
 - 浏览器 iframe 实际渲染、fnOS 桌面内嵌窗口未执行（e5 无浏览器；网关需飞牛登录态）。
+  用户反馈 0.22.6 测试包内嵌可登录、刷新白屏，已据此修复并构建 0.22.14。
 
 ## 6. 证据与产物
 
-- 分支：`refactor/embedded-gateway`（已推送，最新 `c66ee32`）
+- 分支：`refactor/embedded-gateway`（已推送，HEAD 见 GitHub）
 - CI：`.github/workflows/test.yml` 在分支上连续通过
   （例：run `41666246054`、`41666044281`、`41664090763`、`41662809087`、`41658183003`、`41657585799`）
-- 构建：`/tmp/hermes-build/hermes-desktop.fpk`（0.22.6，已安装到 e5）、
-  `/tmp/hermes-build/upgrade-out/hermes-desktop.fpk`（0.22.13，门禁通过，未升级）
-- 日志：`/tmp/makefpk3.log`、`/tmp/hermes-tests.log`、`/tmp/install.log`、
+- 官方构建：`dist/Hermes-Desktop-fnOS-v0.22.14-fd267bb3.fpk`（0.22.14 / 上游 fd267bb3）
+- 早期测试：`/tmp/hermes-build/hermes-desktop.fpk`（0.22.6，已安装到 e5）
+- 日志：`/tmp/official-build-0.22.14b.log`、`/tmp/hermes-tests.log`、`/tmp/install.log`、
   `/vol1/@appdata/hermes-desktop/{info.log,logs/gateway.log,gateway-adapter.log}`
 
 ### 6.1 PR 创建状态

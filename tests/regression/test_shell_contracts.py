@@ -81,9 +81,18 @@ class GatewayConfigContractTests(unittest.TestCase):
         )
         self.assertEqual(embedded["gatewayPrefix"], values["prefix"])
         self.assertEqual(embedded["gatewaySocket"], values["socket_name"])
-        self.assertEqual(embedded["url"], values["prefix"])
+        self.assertEqual(embedded["url"], values["prefix"] + "/")
         self.assertNotIn("protocol", embedded)
         self.assertNotIn("port", embedded)
+
+    def test_adapter_redirects_bare_mount_path(self) -> None:
+        """Reload at /app/<app> (no trailing slash) must not 404 relative assets."""
+        adapter = (
+            REPO / "packaging" / "fpk" / "app" / "runtime" / "gateway" / "gateway_adapter.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("path_only == prefix", adapter)
+        self.assertIn("302 Found", adapter)
+        self.assertIn("prefix + \"/\"", adapter)
 
 
 if __name__ == "__main__":

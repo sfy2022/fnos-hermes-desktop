@@ -365,6 +365,17 @@ class GatewayHandler(socketserver.BaseRequestHandler):
         path_only, sep, query = target.partition("?")
         stripped = strip_prefix(path_only, prefix)
 
+        # Canonical trailing slash.  Hermes' index.html uses *relative* asset URLs
+        # ("./assets/..."), so loading "/app/hermes-desktop" (no slash) would resolve
+        # them to "/app/assets/..." and 302/404 — a white page after an iframe
+        # reload.  Redirect the bare mount path before it reaches upstream.
+        if prefix and path_only == prefix and method in ("GET", "HEAD"):
+            location = prefix + "/"
+            if sep:
+                location += "?" + query
+            self._redirect(location)
+            return
+
         # Health endpoint is handled locally (never forwarded, never authenticated here;
         # the fnOS gateway already validated the NAS session for this route).
         if stripped == self.server.health_path:
@@ -388,6 +399,19 @@ class GatewayHandler(socketserver.BaseRequestHandler):
                 pass
 
     # -- local endpoints ---------------------------------------------------
+
+    def _redirect(self, location: str) -> None:
+        head = (
+            "HTTP/1.1 302 Found\r\n"
+            f"Location: {location}\r\n"
+            "Content-Length: 0\r\n"
+            "Connection: close\r\n"
+            "\r\n"
+        )
+        try:
+            self.request.sendall(head.encode("latin-1"))
+        except OSError:
+            pass
 
     def _health(self) -> None:
         host, port = self.server.upstream
