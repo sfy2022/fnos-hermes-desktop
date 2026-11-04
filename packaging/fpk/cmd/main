@@ -54,6 +54,7 @@ esac
 GATEWAY_PREFIX=""
 GATEWAY_SOCKET_NAME=""
 GATEWAY_SOCKET=""
+GATEWAY_FORWARDED_PROTO="auto"
 
 log_msg() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "${LOG_FILE}" 2>/dev/null || true
@@ -75,6 +76,7 @@ load_gateway_conf() {
             case "${key}" in
                 prefix)      GATEWAY_PREFIX="${value}" ;;
                 socket_name) GATEWAY_SOCKET_NAME="${value}" ;;
+                forwarded_proto) GATEWAY_FORWARDED_PROTO="${value}" ;;
             esac
         done < "${GATEWAY_CONF}"
     fi
@@ -472,6 +474,7 @@ start_gateway_adapter() {
         --socket "${GATEWAY_SOCKET}" \
         --upstream "127.0.0.1:${SERVICE_PORT}" \
         --prefix "${GATEWAY_PREFIX}" \
+        --forwarded-proto "${GATEWAY_FORWARDED_PROTO}" \
         --health-path "${ADAPTER_HEALTH_PATH}" \
         >"${ADAPTER_LOG}" 2>&1 &
 

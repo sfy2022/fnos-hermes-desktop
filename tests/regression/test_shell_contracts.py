@@ -170,7 +170,9 @@ class GatewayConfigContractTests(unittest.TestCase):
 
         ui = json.loads((REPO / "packaging" / "fpk" / "app" / "ui" / "config").read_text())
         embedded = ui[".url"]["hermes-desktop.Embedded"]
-        conf = (REPO / "packaging" / "fpk" / "app" / "runtime" / "gateway" / "gateway.conf").read_text()
+        conf = (
+            REPO / "packaging" / "fpk" / "app" / "runtime" / "gateway" / "gateway.conf"
+        ).read_text(encoding="utf-8")
         values = dict(
             line.split("=", 1) for line in conf.splitlines() if "=" in line and not line.startswith("#")
         )

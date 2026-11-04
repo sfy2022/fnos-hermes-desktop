@@ -182,6 +182,22 @@ class PureHelperTests(unittest.TestCase):
         for gone in ("connection", "upgrade", "content-length"):
             self.assertNotIn(gone, values)
 
+    def test_forwarded_proto_override(self) -> None:
+        headers = [
+            ("Host", "desktop.local:5666"),
+            ("X-Forwarded-Proto", "https"),
+            ("Forwarded", "proto=https"),
+        ]
+        out = adapter.build_upstream_headers(
+            headers,
+            prefix=PREFIX,
+            upstream_authority=UPSTREAM_AUTHORITY,
+            forwarded_proto="http",
+        )
+        values = {key.lower(): value for key, value in out}
+        self.assertEqual(values["x-forwarded-proto"], "http")
+        self.assertNotIn("forwarded", values)
+
     def test_rewrite_response_headers(self) -> None:
         headers = [
             ("Content-Security-Policy", CSP),
@@ -215,6 +231,29 @@ class PureHelperTests(unittest.TestCase):
         # stripped); check the raw list too.
         self.assertEqual(values["connection"], "close")
         self.assertEqual(out[-1], ("Connection", "close"))
+
+    def test_http_cookie_normalization(self) -> None:
+        headers = [
+            (
+                "Set-Cookie",
+                "__Secure-hermes_session_at_x=abc; Path=/app/hermes-desktop; "
+                "HttpOnly; Secure; SameSite=lax",
+            ),
+            ("Set-Cookie", "plain=1; Path=/; Secure"),
+        ]
+        out, _ = adapter.rewrite_response_headers(
+            list(headers), force_http_cookies=True
+        )
+        cookies = [value for key, value in out if key.lower() == "set-cookie"]
+        self.assertEqual(
+            cookies[0],
+            "hermes_session_at_x=abc; Path=/app/hermes-desktop; "
+            "HttpOnly; SameSite=lax",
+        )
+        self.assertEqual(cookies[1], "plain=1; Path=/")
+        # Without the HTTP override the adapter must not touch cookies.
+        unchanged, _ = adapter.rewrite_response_headers(list(headers))
+        self.assertIn("Secure", dict((k.lower(), v) for k, v in unchanged)["set-cookie"])
 
     def test_rewrite_response_headers_no_csp(self) -> None:
         out, changed = adapter.rewrite_response_headers(
@@ -264,7 +303,7 @@ class PureHelperTests(unittest.TestCase):
             errors="replace",
         )
         self.assertEqual(help_run.returncode, 0)
-        for flag in ("--socket", "--upstream", "--prefix", "--health-path"):
+        for flag in ("--socket", "--upstream", "--prefix", "--forwarded-proto", "--health-path"):
             self.assertIn(flag, help_run.stdout)
         version_run = subprocess.run(
             [sys.executable, str(ADAPTER_PATH), "--version"],

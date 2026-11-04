@@ -88,7 +88,9 @@
 | 登录跳转 | `302 /login` 变成 `/app/hermes-desktop/login` |
 | Cookie Path | 会话 Cookie 的 `Path` 落在前缀下 |
 
-因此 adapter **不再**处理 `Location`、`Set-Cookie`（旧方案手改这两处，正是「登录循环/跳回桌面根」的来源）。
+因此 adapter **不改** `Location`；Cookie 只允许一个 HTTP 兼容例外：
+`forwarded_proto=http` 时去掉认证 Cookie 的 `Secure`/`__Secure-` 前缀，value 不变。
+旧方案手改 Location/Set-Cookie Path，正是「登录循环/跳回桌面根」的来源。
 排障时若出现前缀相关症状，第一反应应是「`X-Forwarded-Prefix` 有没有送到上游 / 值对不对」，
 而不是去改上游返回的 HTML。
 
@@ -128,7 +130,7 @@ python3 gateway_adapter.py \
 | 入站路径 | 严格剥掉 `--prefix`；剥离后以 `/` 开头；路径不在前缀下 → 404 | 宽松前缀匹配（如 `/app/hermes-desktopX` 也算命中） |
 | 请求头 | 注入/覆盖 `X-Forwarded-Prefix`；`Host` 指向上游；`Origin`/`Referer` 重写为 `http://127.0.0.1:<port>`；透传 `Cookie`、`X-Trim-*`、`Authorization`、`Sec-WebSocket-*` | 透传 hop-by-hop 头（`Connection`/`Transfer-Encoding`/`Upgrade` 等按 RFC 处理） |
 | 请求体 | chunked 要解码后转发；有大小上限与超时 | 缓冲整个请求体到内存无上限 |
-| 响应头 | **只改** CSP 的 `frame-ancestors` 与 `X-Frame-Options`；其余头原样 | 改 `Location`、`Set-Cookie`、`Content-Length` 等业务头 |
+| 响应头 | **只改** CSP 的 `frame-ancestors`、`X-Frame-Options`；HTTP 模式下去掉 Cookie 的 Secure/`__Secure-`；其余原样 | 改 `Location`、改 Cookie value/Path、`Content-Length` 等业务头 |
 | 响应体 | **零改写**（字节透传），支持流式（SSE/大文件）；HEAD/204/304 无 body | 改 HTML/CSS/JS、注入脚本、改 `<base>`、缓冲整个响应 |
 | 连接 | 超时（连接/读/写）、健康端点、SIGTERM 时关闭并清理 socket | 泄漏 socket 文件（重启前应可 `rm -f` 幂等） |
 | WebSocket | 单一 WS 路径；握手头转发 + `Origin/Referer` 重写；`101` 后帧双向透传 | 把 WS 当普通 HTTP 用 `http.client` 转发（读完整响应就结束，扛不住帧流） |
@@ -142,7 +144,8 @@ python3 gateway_adapter.py \
 × 注入任何脚本或注释
 × 修改 <base>
 × 修改 Location
-× 修改 Set-Cookie
+× 修改 Cookie value / Path
+× 修改 Cookie 的 Secure 之外属性
 × 缓冲整个响应（破坏 SSE/大文件）
 × 额外监听 TCP 端口（见 §5）
 ```

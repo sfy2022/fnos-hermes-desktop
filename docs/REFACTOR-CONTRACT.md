@@ -17,7 +17,9 @@
 - 同一 CSP 使用内联脚本 sha256 白名单、`base-uri 'none'`、`form-action 'none'`；
   **禁止任何 HTML/JS/CSS 响应体改写**，否则哈希失效、白屏。
 - 上游原生支持 `X-Forwarded-Prefix`：资源 URL、`__HERMES_BASE_PATH__`、登录跳转、
-  Cookie Path 均由上游处理；adapter 不再重写 Location/Set-Cookie。
+  Cookie Path 均由上游处理；adapter 不改 Location，也不改 Cookie value。
+- 适配 fnOS HTTP 网关：`forwarded_proto=http` 时 adapter 可去掉 Cookie 的
+  `Secure`/`__Secure-` 属性（HTTP 浏览器会丢弃 Secure Cookie）；value 与响应体不变。
 - adapter 只允许改一个响应头：`Content-Security-Policy` 中的
   `frame-ancestors 'none'` → `frame-ancestors 'self'`；`X-Frame-Options: DENY` → `SAMEORIGIN`。
   直连 `:9120` 不经过 adapter，CSP 保持 `'none'`。
@@ -97,7 +99,8 @@ wizard/{install, config, upgrade, uninstall}
 - 响应：**body 零改写**；只改上述安全头；流式转发（SSE/大文件）；HEAD/204/304 无 body。
 - chunked 请求体要解码；头/体上限；超时；健康端点；SIGTERM 清理 socket。
 - WS：单一路径；握手头转发 + Origin/Referer 重写；101 后帧双向透传。
-- 禁止：改写 HTML/CSS/JS、注入脚本、改 `<base>`、改 Location、改 Set-Cookie、缓冲整个响应。
+- 禁止：改写 HTML/CSS/JS、注入脚本、改 `<base>`、改 Location、改 Cookie value、缓冲整个响应。
+- 唯一 Cookie 例外：`forwarded_proto=http` 时去掉 Secure/`__Secure-` 属性。
 
 ## 6. 路径与命令冻结
 

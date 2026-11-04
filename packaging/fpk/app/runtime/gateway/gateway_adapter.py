@@ -178,27 +178,55 @@ def build_upstream_headers(
     prefix: str,
     upstream_authority: str,
     forwarded_for: str = "127.0.0.1",
+    forwarded_proto: str = "auto",
 ) -> list[tuple[str, str]]:
     """Build request headers for the upstream Hermes process."""
     out: list[tuple[str, str]] = []
     for key, value in headers:
         lkey = key.lower()
-        if lkey in HOP_BY_HOP or lkey in {"host", "content-length", "x-forwarded-prefix"}:
+        if lkey in HOP_BY_HOP or lkey in {
+            "host", "content-length", "x-forwarded-prefix", "x-forwarded-proto", "forwarded",
+        }:
             continue
         if lkey in {"origin", "referer"}:
             value = _rewrite_absolute_url(value, upstream_authority)
         out.append((key, value))
 
+    if forwarded_proto in {"http", "https"}:
+        proto = forwarded_proto
+    else:
+        proto = get_header(headers, "x-forwarded-proto") or "http"
     out.append(("Host", upstream_authority))
     out.append(("X-Forwarded-Prefix", prefix))
     out.append(("X-Forwarded-Host", get_header(headers, "host") or upstream_authority))
-    out.append(("X-Forwarded-Proto", get_header(headers, "x-forwarded-proto") or "http"))
+    out.append(("X-Forwarded-Proto", proto))
     existing_xff = get_header(headers, "x-forwarded-for")
     out.append(("X-Forwarded-For", f"{existing_xff}, {forwarded_for}" if existing_xff else forwarded_for))
     return out
 
 
-def rewrite_response_headers(headers: list[tuple[str, str]]) -> tuple[list[tuple[str, str]], bool]:
+def _cookie_without_secure(value: str) -> str:
+    """Make a Set-Cookie value valid for an HTTP browser.
+
+    Only the attributes/name prefixes are changed; the cookie value is untouched.
+    ``__Host-`` also requires Path=/ and Secure, so it must become a bare name too.
+    """
+    parts = [part.strip() for part in value.split(";")]
+    if not parts:
+        return value
+    name = parts[0]
+    low = name.lower()
+    for prefix in ("__host-", "__secure-"):
+        if low.startswith(prefix):
+            name = name[len(prefix):]
+            break
+    attrs = [part for part in parts[1:] if part and part.lower() != "secure"]
+    return "; ".join([name] + attrs)
+
+
+def rewrite_response_headers(
+    headers: list[tuple[str, str]], *, force_http_cookies: bool = False
+) -> tuple[list[tuple[str, str]], bool]:
     """Strip hop-by-hop headers, relax frame policy, force Connection: close."""
     out: list[tuple[str, str]] = []
     csp_changed = False
@@ -211,6 +239,8 @@ def rewrite_response_headers(headers: list[tuple[str, str]]) -> tuple[list[tuple
             csp_changed = csp_changed or changed
         elif lkey == "x-frame-options":
             value = relax_x_frame_options(value)
+        elif lkey == "set-cookie" and force_http_cookies:
+            value = _cookie_without_secure(value)
         out.append((key, value))
     out.append(("Connection", "close"))
     return out, csp_changed
@@ -422,6 +452,7 @@ class GatewayHandler(socketserver.BaseRequestHandler):
                 "version": VERSION,
                 "pid": os.getpid(),
                 "prefix": self.server.prefix,
+                "forwarded_proto": self.server.forwarded_proto,
                 "upstream": f"{host}:{port}",
                 "upstream_ok": _upstream_is_alive(host, port),
                 "socket": self.server.socket_path,
@@ -446,6 +477,7 @@ class GatewayHandler(socketserver.BaseRequestHandler):
             prefix=self.server.prefix,
             upstream_authority=f"{host}:{port}",
             forwarded_for=forwarded_for,
+            forwarded_proto=self.server.forwarded_proto,
         )
         if body:
             out_headers.append(("Content-Length", str(len(body))))
@@ -458,7 +490,10 @@ class GatewayHandler(socketserver.BaseRequestHandler):
             conn.endheaders(body or None)
             response = conn.getresponse()
 
-            response_headers, _ = rewrite_response_headers(list(response.getheaders()))
+            response_headers, _ = rewrite_response_headers(
+                list(response.getheaders()),
+                force_http_cookies=(self.server.forwarded_proto == "http"),
+            )
             status_line = f"HTTP/1.1 {response.status} {response.reason}\r\n"
             head = status_line + "".join(f"{k}: {v}\r\n" for k, v in response_headers) + "\r\n"
             self.request.sendall(head.encode("latin-1"))
@@ -495,6 +530,7 @@ class GatewayHandler(socketserver.BaseRequestHandler):
             headers,
             prefix=self.server.prefix,
             upstream_authority=authority,
+            forwarded_proto=self.server.forwarded_proto,
         )
         # Keep the upgrade handshake fields that build_upstream_headers stripped.
         out_headers.append(("Upgrade", "websocket"))
@@ -579,10 +615,12 @@ if hasattr(socketserver, "UnixStreamServer"):
             prefix: str,
             upstream: tuple[str, int],
             health_path: str,
+            forwarded_proto: str = "auto",
         ) -> None:
             self.prefix = prefix.rstrip("/")
             self.upstream = upstream
             self.health_path = health_path
+            self.forwarded_proto = forwarded_proto
             self.socket_path = socket_path
             try:
                 if os.path.exists(socket_path):
@@ -614,6 +652,7 @@ def serve(
     upstream: tuple[str, int],
     prefix: str,
     health_path: str,
+    forwarded_proto: str = "auto",
 ) -> int:
     if ProxyServer is None:
         log("Unix stream sockets are not available on this platform; adapter must run on fnOS Linux")
@@ -624,6 +663,7 @@ def serve(
         prefix=prefix,
         upstream=upstream,
         health_path=health_path,
+        forwarded_proto=forwarded_proto,
     )
 
     def _stop(_signum, _frame):
@@ -652,6 +692,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--socket", required=True, help="Unix socket path to listen on")
     parser.add_argument("--upstream", required=True, help="upstream host:port")
     parser.add_argument("--prefix", default="", help="gateway prefix to strip (e.g. /app/hermes-desktop)")
+    parser.add_argument(
+        "--forwarded-proto",
+        choices=("auto", "http", "https"),
+        default="auto",
+        help="X-Forwarded-Proto sent upstream; http avoids Secure cookies on fnOS HTTP 5666",
+    )
     parser.add_argument("--health-path", default="/.gateway-health", help="local health endpoint path")
     parser.add_argument("--log-file", default="", help="append adapter logs to this file as well")
     parser.add_argument("--version", action="version", version=f"{ADAPTER_NAME} {VERSION}")
@@ -668,6 +714,7 @@ def main(argv: list[str] | None = None) -> int:
         upstream=(host, int(port_text)),
         prefix=args.prefix,
         health_path=args.health_path,
+        forwarded_proto=args.forwarded_proto,
     )
 
 

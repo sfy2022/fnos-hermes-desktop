@@ -215,6 +215,24 @@ error: Python installation is missing a `_sysconfigdata_` file
 `reset --hard FETCH_HEAD`，并让 codeload 回退对 tag 使用 `refs/tags/...`。
 版本策略同步调整为：应用版本 = 上游 Release 版本，不再本地自增；旧的 0.22.13~0.22.21
 是本地验证包，不是 Release。
+
+### 4.10 0.22.6 内嵌登录 Cookie 修复
+
+真机症状：HTTP `:5666` 的内嵌登录成功返回 `{"ok":true,"next":"/app/hermes-desktop/"}`，
+但随后仍跳回 `/login`；先直连 `:9120` 登录一次后，内嵌即可打开。
+
+根因：fnOS 网关向上游转发的 `X-Forwarded-Proto` 被上游当成 HTTPS，登录响应下发
+`Secure` + `__Secure-` Cookie；HTTP 浏览器直接丢弃，所以后续请求没有会话。
+直连 `:9120` 是 HTTP，Cookie 不带 Secure、`Path=/`，对 `:5666` 同样有效（Cookie 不区分端口）。
+
+修复：
+
+- `gateway.conf` 增加 `forwarded_proto=http`（HTTPS 网关可改 `https`）；
+- adapter 覆盖上游 `X-Forwarded-Proto`，并移除入站 `Forwarded`，避免 uvicorn 再次误判；
+- 仅在 `forwarded_proto=http` 时，去掉认证 Cookie 的 `Secure` 与 `__Secure-` 前缀；
+  Cookie value/Path、响应体不变；
+- e5 适配层实测：登录响应 Cookie 变为 bare name、无 Secure，带 Cookie 跟随 `next` 返回 **200 SPA**。
+
 ## 5. 真机安装与内嵌验收（e5）
 
 在 e5 上安装本仓库重构包（`0.22.6`，含新 adapter/main/布局），`appcenter-cli` 安装成功、应用 running：

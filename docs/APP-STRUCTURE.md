@@ -188,10 +188,13 @@ packaging/fpk/
 ```ini
 prefix=/app/hermes-desktop
 socket_name=app.sock
+forwarded_proto=http
 ```
 
 - 单一来源：`cmd/main`、adapter 启动参数、`app/ui/config` 的网关字段都由它派生（当前 `cmd/main` 里是硬编码常量 `GATEWAY_PREFIX="/app/hermes-desktop"`，迁移后改为读取本文件）。
 - `socket_name` 只写文件名；实际路径固定为 `${TRIM_APPDEST}/app.sock`（与 `gatewaySocket` 语义一致，见官方 app-entry 页对 `gatewaySocket` 的要求）。
+- `forwarded_proto`：`http`（默认，适配 fnOS 5666）会覆盖上游 `X-Forwarded-Proto` 并去掉
+  Cookie 的 Secure/`__Secure-`，避免 HTTP 浏览器丢弃登录 Cookie；HTTPS 网关可改 `https`。
 
 ---
 
