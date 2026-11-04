@@ -1,190 +1,245 @@
-# Hermes Desktop for fnOS
+﻿# Hermes Desktop for fnOS
 
-The **official Hermes Desktop workspace** packaged for fnOS (飞牛 NAS) — using
-Hermes' own browser-hosted "Webapp" form. **No upstream code is modified**, no
-Electron, no virtual display, no VNC streaming.
+The **official Hermes Desktop workspace** packaged for fnOS (飞牛 NAS). It uses
+Hermes' own Webapp bundle, with no upstream code changes, no Electron, and no
+virtual display or streaming.
 
-[中文](README.md) · [Implementation report](docs/IMPLEMENTATION.md)
+**[Download the latest release](https://github.com/sfy2022/fnos-hermes-desktop/releases/latest)** ·
+[Current state](docs/CURRENT-STATE.md) · [中文](README.md)
 
-> Packaged by [巴盟女婿](https://github.com/sfy2022/fnos-hermes-desktop)
 > Upstream: [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)
-
----
-
-## What this is
-
-The Hermes desktop app (Electron) produces its renderer in **two forms**:
-
-| Artifact | Purpose | Here |
-|---|---|---|
-| Electron bundle (AppImage/deb/rpm) | Native desktop client | ✗ Upstream Linux release legs are disabled; NAS has no display |
-| **Webapp bundle** (`dist-webapp`) | **The Desktop workspace, in a browser** | ✅ Used |
-
-Upstream's `hermes_cli/webapp.py` states the intent:
-
-> *Build and launch plumbing for the browser-hosted **Desktop workspace**. The browser surface
-> **shares Hermes' hardened dashboard server**... it never creates a second HTTP/WebSocket stack.*
-
-In other words, the official Desktop UI and the browser dashboard **share the same
-transport layer, sessions and tools**. This project packages that official build
-output as an fnOS application, so the NAS desktop icon opens the real thing.
-
-**Result:** you get the **unmodified official Desktop interface** on the NAS — not a lookalike.
-
----
-
-## Features
-
-Identical to the official Desktop Webapp:
-
-- **Chat** — streaming responses, live tool activity, structured tool-call summaries
-- **Side-by-side previews** — web pages, files and tool output in one pane
-- **File browser** — explore the working directory
-- **Artifacts** — searchable gallery of session outputs
-- **Scheduled jobs**, **Profiles**, **Skills management**
-- **Terminal rail**, **Git review**
-- **Messaging gateways** — WeChat / QQ / Lark / Telegram / Discord / Slack …
-- **MCP integration**, **persistent memory**
-
-Shares one session and one queue with the CLI, the native Desktop and the gateway.
-
-### What the browser form cannot do (vs. Electron)
-
-- Global shortcuts, always-on-top overlays, external-terminal launch
-- `safeStorage`-encrypted credential storage
-- Microphone / voice, system notifications, clipboard read
-  (browsers disable these on a plain-HTTP origin that isn't loopback)
-
-If you need those, run the native Desktop on Windows/macOS and point it at the
-same gateway in **remote mode**.
+> This repository maintains the fnOS packaging, lifecycle scripts and gateway adapter.
 
 ---
 
 ## Install
 
-**[⬇️ Download the latest release](https://github.com/sfy2022/fnos-hermes-desktop/releases/latest)** —
-grab `Hermes-Desktop-fnOS-v<version>-<commit>.fpk` from **Assets** (~22 MB, x86_64).
+1. Open [Releases](https://github.com/sfy2022/fnos-hermes-desktop/releases/latest) and download
+   `Hermes-Desktop-fnOS-v<version>-<commit>.fpk` (about 22 MB, x86_64).
+2. In the fnOS desktop, open **App Center → Manual install** and select the fpk.
+3. The install wizard has three steps:
+   - **Access account**: set the Hermes username and password; leave the password empty to generate one.
+   - **Model configuration**: choose OpenRouter / Anthropic / DeepSeek / a custom OpenAI-compatible
+     service, or configure it later.
+   - **Network configuration**: choose the GitHub download channel and Python package index.
 
-飞牛桌面 → **应用中心** → **手动安装** → choose that `.fpk`
+### App files and runtime data
 
-The wizard asks for:
+| Content | Location |
+|---|---|
+| App files (visible in File Manager → App files) | `/vol1/@appshare/hermes-desktop` |
+| Config files | `/vol1/@appshare/hermes-desktop/config` |
+| Logs | `/vol1/@appshare/hermes-desktop/logs` |
+| Workspace | `/vol1/@appshare/hermes-desktop/workspace` |
+| Runtime data (venv, source, sessions) | `/vol1/@appdata/hermes-desktop` |
+| HOME | `/vol1/@apphome/hermes-desktop` |
 
-1. **Username / password** (leave the password blank and a random 20-character
-   one is generated; it is written to `access-info.txt` in the app data dir)
-2. **GitHub channel** (auto-probe by default) and **Python index**
-   (official PyPI by default)
+`/vol1/@appconf/hermes-desktop` contains symlinks to the files in `@appshare`.
+Edit the real files under App files, not the symlinks.
 
-Then:
+---
 
-1. The **Hermes Desktop** icon appears on the desktop — click it to open in a
-   fnOS window
-2. First launch walks you through picking a model provider
-3. To let the agent operate the NAS, feed it the
-   [official fnOS Skill](https://club.fnnas.com/forum.php?mod=viewthread&tid=67918)
+## Desktop entry and direct access
+
+| Method | Address | Authentication | Notes |
+|---|---|---|---|
+| Embedded desktop | fnOS gateway `/app/hermes-desktop/` | fnOS session + Hermes account | The only Hermes entry on the desktop |
+| Browser direct | `http://<NAS_IP>:9120` | Hermes account | Bypasses the fnOS gateway; no second desktop entry |
+
+Both access the same backend and the same session.
+
+**Embedded path**: fnOS desktop iframe → fnOS gateway `/app/hermes-desktop/*` →
+app `target/app.sock` → `gateway_adapter.py` → `127.0.0.1:9120`.
+
+The adapter:
+
+- strips the gateway prefix and injects `X-Forwarded-Prefix`;
+- rewrites `Host`, `Origin` and `Referer` for the upstream;
+- relays WebSocket frames;
+- relaxes the page CSP from `frame-ancestors 'none'` to `'self'` and changes
+  `X-Frame-Options: DENY` to `SAMEORIGIN`;
+- with HTTP, removes `Secure` and the `__Secure-` prefix from authentication cookies so the
+  browser does not drop them.
+
+The response body is not rewritten. Direct `:9120` keeps the strict CSP.
+
+Embedded sign-in uses the Hermes account configured during installation. You do **not** need to
+open `:9120` and sign in first. If the embedded page keeps returning to `/login`, clear old cookies
+for the NAS site and retry in a private window.
+
+---
+
+## What this is
+
+The official Hermes desktop produces an Electron bundle and a Webapp bundle. This project uses the
+**Webapp bundle** because it runs in a browser and does not need a display server.
+
+Upstream `hermes_cli/webapp.py` is designed so the browser workspace and the dashboard share the
+same transport, sessions and tools. This repository only packages that official build output for
+fnOS, so the UI is the real Desktop workspace.
+
+---
+
+## Features
+
+Same as the official Desktop Webapp:
+
+- streaming chat, live tool activity and structured tool-call summaries
+- side-by-side previews for pages, files and tool output
+- file browser and Artifacts gallery
+- scheduled jobs, multiple profiles and skill management
+- terminal rail and Git review
+- messaging gateways: Telegram, Discord, Slack, WeChat, QQ and others
+- MCP integration and persistent memory
+- bundled fnOS Skill for files, Docker, apps, storage, networking and monitoring
+
+The browser form does not provide the Electron-only tray, native notifications, global shortcuts,
+native file pickers, microphone access or full hardware acceleration. For those, run the official
+native Desktop and connect it to the same gateway.
+
+---
+
+## fnOS authorization
+
+The app includes a **fnOS authorization** panel for granting the agent access to the local NAS or
+other fnOS devices.
+
+Open it from the status bar, or go to:
+
+```text
+http://<NAS_IP>:9120/#/fnos-auth
+```
+
+Add the target NAS, start authorization, sign in with that NAS account, then paste the authorization
+code back into the panel. Grant only the permissions the agent actually needs.
+
+---
+
+## Updates
+
+The status bar shows the current version. When a new release is available:
+
+1. download the new fpk and verify its SHA256;
+2. install it through the native fnOS upgrade flow;
+3. the app restarts while configuration and sessions are preserved.
+
+Use the fnOS App Center Web UI for upgrades and uninstalls.
 
 ---
 
 ## Security
 
-⚠️ **A signed-in user is effectively granted command execution on the host**
-(terminal tools, file access, credentials).
+A signed-in user effectively has command execution on the host (terminal, file access and
+credentials).
 
-- The app binds `0.0.0.0:9120` and **always enforces password auth**
-  (a wildcard bind engages the dashboard sign-in gate)
-- **Never expose it to the public internet.** Use a VPN / Tailscale, or a
-  reverse proxy with HTTPS
-- Change the password: edit `dashboard.basic_auth` in the app's `config.yaml`,
-  then restart the app
+- The app binds `0.0.0.0:9120`, so Hermes requires authentication. Without a valid
+  `dashboard.basic_auth` section, the webapp refuses to listen.
+- Do not expose the app directly to the public internet. Use a VPN, Tailscale, or a reverse proxy
+  with HTTPS.
+- To change the Hermes password, write a scrypt hash to `dashboard.basic_auth.password_hash` and
+  restart the app. Do not store the plaintext password in the config.
 
 ---
 
-## Automated builds
+## Builds
 
-GitHub Actions keeps this in sync with upstream and publishes ready-to-install
-packages:
+Packages are built only when upstream publishes a new official Release:
 
 | Workflow | Trigger | Purpose |
 |---|---|---|
-| `sync.yml` | every 6 hours | Compare upstream commit; build only when it changed |
-| `build.yml` | daily 03:17 / manual / script changes | Clone upstream → build renderer → pack fpk → publish Release |
+| `sync.yml` | every 6 hours / manual | Check the latest upstream Release; dispatch a build only when it differs from `.upstream-release` |
+| `build.yml` | `sync.yml` / manual | Build from the upstream Release tag, publish the fpk and record the built version |
 
-Grab `hermes-desktop.fpk` from the **Releases** page.
+The app version always matches the upstream Release tag. To rebuild an already-built release, run
+`build.yml` manually with `force`, or pass a specific `upstream_ref`.
 
-### Build locally
+### Local build
 
-Requires **Node >= 26** (a hard check in upstream's build script) plus git and curl:
+Requires Node.js >= 26, git, curl and fnpack:
 
 ```bash
-bash scripts/build.sh
-# outputs: dist/hermes-desktop.fpk + dist/build-info.json
+UPSTREAM_REF=v0.22.7 APP_VERSION=0.22.7 bash scripts/build.sh
+# outputs: dist/Hermes-Desktop-fnOS-v<version>-<commit>.fpk + dist/build-info.json
 ```
 
 Environment overrides:
 
 ```bash
-UPSTREAM_REF=v0.22.5   # build a specific upstream version
+UPSTREAM_REF=v0.22.7   # upstream Release tag
+APP_VERSION=0.22.7     # override the manifest version
 SKIP_BUNDLE=1          # reuse an existing renderer build
-OUTPUT_DIR=/path/out   # where to write artifacts
+OUTPUT_DIR=/path/out   # output directory
 ```
 
-A fast check that the packaging chain is intact (~1 minute, no full renderer build):
-
-```bash
-bash scripts/smoke.sh
-```
+If `APP_VERSION` is omitted, the build uses the version of the upstream tag.
 
 ---
 
-## Technical notes (hard-won constraints)
+## Troubleshooting
 
-Each of these was found by running on a real NAS, and each is baked into
-`scripts/build.sh` and `packaging/fpk/cmd/`.
+### The app does not open / 502
 
-### Build side
+```bash
+tail -50 /vol1/@appshare/hermes-desktop/logs/gateway.log
+tail -50 /vol1/@appdata/hermes-desktop/info.log
+curl --unix-socket /var/apps/hermes-desktop/target/app.sock \
+  http://localhost/app/hermes-desktop/.gateway-health
+```
 
-- **Node must be >= 26** — upstream's `scripts/build/node-deps.mjs` enforces it
-- The renderer build must skip the Electron binary
-  (`build-webapp.mjs` already does: `electron: false`)
-- The renderer is **not committed** (47 MB / 1081 files); CI regenerates it
+Check that the adapter is running, `target/app.sock` exists, and the prefix/socket in
+`gateway.conf` match `app/ui/config`.
 
-### Runtime side (the fpk install scripts)
+### Direct `:9120` does not listen
 
-1. **Install from GitHub source, not PyPI** — PyPI tops out at 0.19.0, and that
-   release has **no `hermes webapp` command**
-2. **Python 3.14 is required** — dependencies are declared under
-   `python_version >= '3.14'` (`ruamel.yaml`) but imported unconditionally
-3. **Resolve dependencies against official PyPI** with
-   `--exclude-newer 2027-01-01`: modern uv defaults to an `exclude-newer`
-   cutoff, and **mirrors that omit upload-time metadata** cause every
-   dependency to be filtered out as "too new"
-4. **Multi-path GitHub fallback** — git clone → codeload → gh-proxy.com →
-   ghproxy.net → direct; `curl` needs `--http1.1` on the NAS
-5. **Don't hand-assemble the uv download URL** — wheel filenames carry the
-   version; resolve via the PyPI JSON API instead
-6. **`TRIM_SERVICE_PORT` may be empty during install** — fall back to 9120 and
-   validate it's numeric
-7. **fnOS `wizard/*` files must be JSON arrays** — shell scripts break
-   `fnpack build`
+Usually `config.yaml` is missing a valid `dashboard.basic_auth`, or `webapp.host`/port is wrong.
+Check the real `config/config.yaml` under App files and restart the app.
+
+### Embedded sign-in keeps returning to `/login`
+
+Clear old cookies for the NAS site and verify in a private window. Older sign-ins may leave
+`hermes_*` cookies with different paths; the browser then sends multiple values and the server can
+read an old session.
+
+### Configuration changes have no effect
+
+Edit the real file:
+
+```text
+/vol1/@appshare/hermes-desktop/config/config.yaml
+```
+
+Do not edit the symlink under `@appconf`, and do not edit stale copies under `@appdata`.
+
+### Install reports that `venv` already exists
+
+An incomplete uninstall can leave `venv` behind. Remove
+`/vol1/@appdata/hermes-desktop/venv` and install again.
 
 ---
 
 ## Layout
 
-```
+```text
 .
-├── .github/workflows/
-│   ├── build.yml              # build + publish
-│   └── sync.yml               # upstream change detection
-├── scripts/
-│   ├── build.sh               # full build pipeline
-│   └── smoke.sh               # fast packaging check
-├── packaging/fpk/             # fpk template (renderer injected at build time)
+├── .github/workflows/          # sync / build
+├── scripts/                    # build and check scripts
+├── packaging/fpk/              # fpk template
 │   ├── manifest
-│   ├── cmd/                   # lifecycle scripts
-│   ├── config/                # privilege / resource
-│   ├── wizard/                # install wizard (JSON)
-│   └── app/ui/config          # desktop entry (iframe → 9120)
-└── docs/IMPLEMENTATION.md     # implementation report
+│   ├── app/
+│   │   ├── ui/config           # desktop entry
+│   │   ├── runtime/gateway/    # gateway adapter and gateway.conf
+│   │   ├── plugins/            # bundled plugins
+│   │   └── skills/             # bundled fnOS Skill
+│   ├── cmd/                    # lifecycle scripts
+│   ├── config/                 # privilege / resource
+│   └── wizard/                 # install, config, upgrade, uninstall
+├── docs/
+│   ├── CURRENT-STATE.md
+│   ├── EMBEDDING.md
+│   ├── APP-STRUCTURE.md
+│   ├── IMPLEMENTATION.md
+│   └── REFACTOR-CONTRACT.md
+└── README.md
 ```
 
 ---
@@ -195,8 +250,9 @@ Each of these was found by running on a real NAS, and each is baked into
 - Official Desktop docs: <https://hermes-agent.nousresearch.com/docs/user-guide/desktop>
 - fnOS developer docs: <https://developer.fnnas.com/>
 - fnpack: <https://developer.fnnas.com/docs/cli/fnpack>
+- Issues: <https://github.com/sfy2022/fnos-hermes-desktop/issues>
 
 ## License
 
-This repository (the fpk packaging and automation) is a community contribution.
+The fpk packaging and automation in this repository are a community contribution.
 Upstream Hermes Agent keeps its own license (MIT).

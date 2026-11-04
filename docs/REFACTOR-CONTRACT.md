@@ -1,130 +1,141 @@
-# REFACTOR CONTRACT（冻结）
+# 内嵌与打包契约（REFACTOR-CONTRACT）
 
-> 本文件是本次重构的唯一决策来源。所有成员开工前先读；改动需 Lead 更新本文件。
-> 目标仓库镜像：`hermes-src/`（对应 sfy2022/fnos-hermes-desktop@main）。
-> 真机：`ssh e5`（192.168.1.2，用户 sun，fnOS/Debian 12，x86_64）。
+> 本文件是内嵌链路、包结构和运行期布局的冻结契约。
+> 当前版本、发布流程和运行状态见 [CURRENT-STATE.md](./CURRENT-STATE.md)。
 
 ## 1. 目标
 
-1. 修复桌面内嵌：`iframe → fnOS 网关 → target/app.sock → adapter → 127.0.0.1:9120`。
-2. 按飞牛官方规范重整 FPK 包结构与运行期 `etc/var/home` 布局。
-3. 删除现有 `gateway_proxy.py` + `fnos_bridge.py` 的 HTML/JS 改写方案。
+1. 桌面内嵌链路：`iframe → fnOS 网关 → target/app.sock → adapter → 127.0.0.1:9120`。
+2. 按 fnOS 规范组织 FPK 包结构和运行期布局。
+3. 禁止旧的 HTML/JS 改写方案。
 
-## 2. 根因与核心决策（已验证）
+## 2. 根因与核心决策
 
-- 上游 Webapp 返回 CSP `frame-ancestors 'none'`（commit `8d91e48e` 的
-  `hermes_cli/webapp_page_policy.py`），浏览器拒绝 iframe。
+- 上游 Webapp 下发 CSP `frame-ancestors 'none'`，浏览器拒绝 iframe。
 - 同一 CSP 使用内联脚本 sha256 白名单、`base-uri 'none'`、`form-action 'none'`；
-  **禁止任何 HTML/JS/CSS 响应体改写**，否则哈希失效、白屏。
-- 上游原生支持 `X-Forwarded-Prefix`：资源 URL、`__HERMES_BASE_PATH__`、登录跳转、
-  Cookie Path 均由上游处理；adapter 不改 Location，也不改 Cookie value。
-- 适配 fnOS HTTP 网关：`forwarded_proto=http` 时 adapter 可去掉 Cookie 的
-  `Secure`/`__Secure-` 属性（HTTP 浏览器会丢弃 Secure Cookie）；value 与响应体不变。
-- adapter 只允许改一个响应头：`Content-Security-Policy` 中的
-  `frame-ancestors 'none'` → `frame-ancestors 'self'`；`X-Frame-Options: DENY` → `SAMEORIGIN`。
-  直连 `:9120` 不经过 adapter，CSP 保持 `'none'`。
+  因此禁止任何 HTML/CSS/JS 响应体改写。
+- 上游原生支持 `X-Forwarded-Prefix`，资源 URL、路由基路径、登录跳转和 Cookie Path
+  由上游处理；adapter 不修改 Location，也不修改 Cookie value/Path。
+- fnOS HTTP 网关下设置 `forwarded_proto=http`，adapter 覆盖上游 `X-Forwarded-Proto`，
+  并去掉认证 Cookie 的 `Secure`/`__Secure-` 属性；这是唯一的 Cookie 例外。
+- adapter 只调整：
+  - CSP `frame-ancestors 'none'` → `'self'`；
+  - `X-Frame-Options: DENY` → `SAMEORIGIN`；
+  - HTTP 模式下认证 Cookie 的 Secure/`__Secure-`。
+- 直连 `:9120` 不经过 adapter，CSP 保持 `'none'` / `DENY`。
 
-## 3. 目标目录
+## 3. 包结构
 
-### 3.1 包结构（`packaging/fpk/`）
-
-```
+```text
 manifest
-ICON.PNG (64x64)  ICON_256.PNG (256x256)
+ICON.PNG (64×64)  ICON_256.PNG (256×256)
 app/
   ui/{config, images/{icon_64.png, icon_256.png[, icon_512.png]}}
   webapp/                      # 构建注入，不提交
   runtime/
     gateway/{gateway_adapter.py, gateway.conf}
-    lib/libs.sh                # 从 cmd/libs.sh 移入
+    lib/libs.sh
   plugins/  skills/
-cmd/                           # 官方 9 脚本 + 内部辅助
-  main, install_init, install_callback, upgrade_init, upgrade_callback,
-  uninstall_init, uninstall_callback, config_init, config_callback
-  pause_gateway.py             # 保留：卸载回调期 target 可能已删除
+cmd/                           # 官方 9 脚本 + pause_gateway.py
 config/{privilege, resource}
 wizard/{install, config, upgrade, uninstall}
 ```
 
-- 包根只允许以上条目；不得有 `README`、`docs`、`tests`、`__pycache__`、`*.pyc`、`node_modules`、`dist`、`*.bak`。
-- `cmd/` 必须含 9 个生命周期脚本；`pause_gateway.py` 为允许的内部辅助。
-- `app/runtime/gateway/gateway.conf`：
-  ```
-  prefix=/app/hermes-desktop
-  socket_name=app.sock
-  ```
-  是 prefix/socket 的单一来源；`app/ui/config`、`cmd/main`、adapter 三方必须一致。
-- `app/ui/images/icon_512.png` 允许保留（高 DPI），但 64/256 必须存在且被入口引用。
+- 包根只允许以上条目；不得包含 `README`、`docs`、`tests`、缓存、构建产物或运行残留。
+- `cmd/` 必须包含 9 个生命周期脚本；`pause_gateway.py` 是允许的内部辅助。
+- `app/ui/images/icon_512.png` 可选，64/256 必须存在并被入口引用。
 
-### 3.2 安装后布局
+### 3.1 `gateway.conf`
 
+```ini
+prefix=/app/hermes-desktop
+socket_name=app.sock
+forwarded_proto=http
 ```
+
+- `prefix` / `socket_name` 是单一来源，`app/ui/config`、`cmd/main`、adapter 三方必须一致。
+- `forwarded_proto` 可选 `http` / `https`；默认 `http` 适配 fnOS 5666。
+- 运行期入口：`target/app.sock`。
+
+## 4. 安装后布局
+
+```text
 /var/apps/hermes-desktop/
   cmd/ config/ wizard/ manifest ICON*
-  target/            # 只读：ui/ webapp/ runtime/ plugins/ skills/
-  etc/               # 文件 0600、目录 0700：config.yaml、access-info.txt、gateway.conf
-  var/               # HERMES_HOME：venv/ src/ logs/ sessions/ state/ cache/
-                     #              gateway.sock app.pid gateway-adapter.pid gateway-adapter.log
-                     #              config.yaml -> ../etc/config.yaml
-  home/              # HOME=TRIM_PKGHOME（.config/trim-cli 等）
-  tmp/
-  shares/            # resource 不声明 data-share 时为空
+  target -> /vol{n}/@appcenter/hermes-desktop
+  etc    -> /vol{n}/@appconf/hermes-desktop
+  var    -> /vol{n}/@appdata/hermes-desktop
+  home   -> /vol{n}/@apphome/hermes-desktop
+  tmp    -> /vol{n}/@apptemp/hermes-desktop
+  meta   -> /vol{n}/@appmeta/hermes-desktop
+  shares/
 ```
 
-- 配置只写 `TRIM_PKGETC`；运行数据只写 `TRIM_PKGVAR`；HOME 只用 `TRIM_PKGHOME`；`target/` 只读。
-- 禁止硬编码 `/vol1`、`/var/apps`。
+配置实体：
 
-## 4. manifest / config 冻结值
+```text
+/vol{n}/@appshare/hermes-desktop/config/{config.yaml,access-info.txt,gateway.conf}
+```
 
-- `platform="x86"`（包内含 x86_64/arm64 trim-cli 二进制；当前只发 x86_64）。
-- 移除 `micro_app`；保留 `appname/version/display_name/desc/source=thirdparty/maintainer/
-  maintainer_url/distributor/distributor_url/desktop_uidir=ui/desktop_applaunchname/
-  service_port=9120/checkport=false/ctl_stop=true/install_dep_apps=python312`。
-- `os_min_version` 不写（待真机实测）。
-- `config/privilege`：`run-as=package`，username/groupname=hermes-desktop；无 join-groups/root。
-- `config/resource`：`{}`（确认无共享目录使用；如代码真用到才保留最小项）。
-- `wizard/*`：JSON 数组；字段 `wizard_*`；禁止 `TRIM_` 自定义字段；不写明文密钥。
+- `@appconf` 中的三个配置文件是指向 `@appshare` 的绝对目标符号链接；
+- `@appdata/config.yaml` 指向 `@appconf`；
+- `@appdata/logs` 指向 `@appshare/.../logs`；
+- 配置只写实体文件；运行数据只写 `@appdata`；HOME 只写 `@apphome`；`target/` 只读。
 
-## 5. adapter 契约（`app/runtime/gateway/gateway_adapter.py`）
+## 5. manifest / config 冻结值
 
-- 纯标准库，可被 `python -m unittest` 导入测试。
-- CLI：
-  ```
-  python3 gateway_adapter.py --socket <path> --upstream 127.0.0.1:<port> \
-      --prefix /app/hermes-desktop [--health-path /.gateway-health] [--log-file <path>]
-  ```
-- 入站路径剥 prefix（严格边界）；注入/覆盖 `X-Forwarded-Prefix`；`Host` 指向上游；
-  `Origin/Referer` 重写为上游地址；透传 `Cookie`、`X-Trim-*`、`Authorization`、`Sec-WebSocket-*`；
-  剥 hop-by-hop 头。
-- 响应：**body 零改写**；只改上述安全头；流式转发（SSE/大文件）；HEAD/204/304 无 body。
-- chunked 请求体要解码；头/体上限；超时；健康端点；SIGTERM 清理 socket。
-- WS：单一路径；握手头转发 + Origin/Referer 重写；101 后帧双向透传。
-- 禁止：改写 HTML/CSS/JS、注入脚本、改 `<base>`、改 Location、改 Cookie value、缓冲整个响应。
-- 唯一 Cookie 例外：`forwarded_proto=http` 时去掉 Secure/`__Secure-` 属性。
+- `platform="x86"`（只发布 x86_64）。
+- 移除 `micro_app`；保留 `appname/version/display_name/desc/source=thirdparty/
+  maintainer/maintainer_url/distributor/distributor_url/desktop_uidir=ui/
+  desktop_applaunchname/service_port=9120/checkport=false/ctl_stop=true/
+  install_dep_apps=python312`。
+- `version` 由构建注入，值等于上游 Release tag；不本地递增。
+- `os_min_version` 暂不写。
+- `config/privilege`：`run-as=package`，username/groupname=`hermes-desktop`，无 root、无额外组。
+- `config/resource`：只声明 `data-share`，共享名 `hermes-desktop`。
+- `wizard/*`：JSON 数组，字段使用 `wizard_*`，禁止自定义 `TRIM_` 字段；密码字段不进入日志。
 
-## 6. 路径与命令冻结
+## 6. adapter 契约
 
-- 构建：`bash scripts/build.sh`（e5 上 PATH 加 Node 26，`APP_VERSION=0.22.13`）。
-- 布局检查：`python3 scripts/check_fpk_layout.py packaging/fpk`（模板模式允许缺 `app/webapp`）。
-- 契约检查：`python3 scripts/check_gateway_contract.py packaging/fpk`。
-- 单测：`python3 -m unittest discover -s tests -v`。
-- 安装：`appcenter-cli install-fpk dist/*.fpk`（e5，user sun；若需 root 则停下报告）。
-- 验收：`curl --unix-socket /var/apps/hermes-desktop/target/app.sock http://localhost/app/hermes-desktop/`；
-  `curl -sSI http://127.0.0.1:9120/`；网关 `:5666/app/hermes-desktop`；WS 101。
+```bash
+python3 gateway_adapter.py \
+  --socket <path> \
+  --upstream 127.0.0.1:<port> \
+  --prefix /app/hermes-desktop \
+  --forwarded-proto http \
+  [--health-path /.gateway-health] \
+  [--log-file <path>]
+```
 
-## 7. 写作用域
+- 只使用标准库。
+- 严格剥 prefix；注入/覆盖 `X-Forwarded-Prefix`；`Host` 指向上游；重写 `Origin`/`Referer`；
+  透传 Cookie、`X-Trim-*`、Authorization、WebSocket 头；剥 hop-by-hop 头。
+- 响应 body 零改写；只调整 CSP frame 指令、XFO 和 HTTP 认证 Cookie 属性。
+- 支持 chunked 请求、SSE、大文件、HEAD/204/304。
+- WebSocket 握手后做双向裸 socket 转发。
+- 健康端点用于本机排障。
+- 启动/退出清理 socket，重复启动幂等。
 
-| 成员 | 写作用域 |
-|---|---|
-| lead | `docs/REFACTOR-CONTRACT.md`、`app/runtime/gateway/gateway_adapter.py`、集成修复 |
-| fpk-architect | `docs/APP-STRUCTURE.md`、`docs/EMBEDDING.md` |
-| fpk-builder | `packaging/fpk/**`（除 gateway_adapter.py）、`scripts/build.sh` |
-| fpk-qa | `scripts/check_fpk_layout.py`、`scripts/check_gateway_contract.py`、`tests/**`、`.github/workflows/test.yml` |
-| fpk-frontend | `packaging/fpk/app/ui/config`、`tests/browser/**` |
+禁止：
 
-## 8. 不允许
+```text
+× 改写 HTML/CSS/JS、注入脚本、修改 <base>
+× 修改 Location、Cookie value/Path
+× 修改认证 Cookie 的 Secure 之外属性
+× 缓冲整个响应
+× 新增 TCP 监听
+× 记录 Cookie、Authorization、Token、密码
+```
 
-- 修改 main 分支、发 Release。
-- 使用 `sudo` 密码（无密码可用）；安装失败则停止并报告。
-- 把上游代码整篇复制进仓库；文档摘要 + 链接。
-- 把 `TRIM_API_TOKEN`、Cookie、密码写入日志/报告。
+## 7. 构建与安装
+
+- 构建：`UPSTREAM_REF=<tag> APP_VERSION=<version> bash scripts/build.sh`。
+- 安装：通过飞牛应用中心 Web UI 手动安装；应用中心 CLI 不支持升级/卸载。
+- 升级保留配置和会话；卸载“清除数据”时归档配置、会话、授权并删除 `@appshare` 配置。
+
+## 8. 相关文档
+
+- [当前状态](./CURRENT-STATE.md)
+- [包结构](./APP-STRUCTURE.md)
+- [内嵌链路](./EMBEDDING.md)
+- [历史设计记录](./IMPLEMENTATION.md)
