@@ -40,6 +40,7 @@ jobs:
       tag: ${{ steps.resolve.outputs.tag }}
       version: ${{ steps.resolve.outputs.version }}
       sha: ${{ steps.resolve.outputs.sha }}
+      pnpm: ${{ steps.pnpm_pin.outputs.version }}
       should_build: ${{ steps.resolve.outputs.should_build }}
       reason: ${{ steps.resolve.outputs.reason }}
 
@@ -91,6 +92,39 @@ jobs:
           echo "- 上游 Release：**${TAG}**（${SHA}）" >> "$GITHUB_STEP_SUMMARY"
           echo "- 本次构建：**${SHOULD}**" >> "$GITHUB_STEP_SUMMARY"
 
+      # 上游 scripts/build/node-deps.mjs 会做严格版本比对：
+      #   pinned !== version  →  "pnpm X is required (pm/lock.json), found Y"
+      # 注意 pin 是**精确**匹配（不是 ^12 语义），所以必须读上游自己那份
+      # pm/lock.json 的 packages.pnpm.version，不能在本地猜一个 12 就装。
+      # 放独立 step：build 里那时上游源码还没 clone，读不到这个文件。
+      - name: 解析上游 pnpm pin
+        id: pnpm_pin
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          NET=""
+          for i in 1 2 3; do
+            NET="$(curl -fsSL --retry 3 --max-time 60 \
+              "https://raw.githubusercontent.com/NousResearch/hermes-agent/${TAG}/pm/lock.json" 2>/dev/null || true
+              )"
+            [ -n "${NET}" ] && break
+            echo "取 pm/lock.json 失败，第 ${i} 次重试"
+            sleep 5
+          done
+          VERSION="$(printf '%s' "${NET}" | python3 -c \
+            'import json,sys;d=json.load(sys.stdin);print(d["packages"]["pnpm"]["version"])' 2>/dev/null \
+            || cat pm/lock.json 2>/dev/null | python3 -c \
+              'import json,sys;d=json.load(sys.stdin);print(d["packages"]["pnpm"]["version"])' 2>/dev/null \
+            || echo "")"
+          if [ -z "${VERSION}" ]; then
+            echo "::error::无法解析上游 ${TAG} 的 pnpm pin（pm/lock.json 取不到，本地副本也不存在）"
+            exit 1
+          fi
+          echo "上游 ${TAG} 的 pnpm pin：${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "- 📌 pnpm pin：**${VERSION}**" >> "$GITHUB_STEP_SUMMARY"
+
   build:
     name: 构建 fpk
     needs: check
@@ -106,9 +140,16 @@ jobs:
           fetch-depth: 0
 
       # 直接下载 Node 26 二进制，不依赖 setup-node。
-      - name: 安装 Node.js 26
+      # pnpm 必须与上游 pm/lock.json 的 pin **完全一致**（精确比对，不是 ^12），
+      # 版本取自 check job 的「解析上游 pnpm pin」，不再在本地读文件或兜底成 12：
+      # 兜底成 12 会装上 12.21.0，而上游要 12.15.0，直接报
+      # "pnpm 12.15.0 is required (pm/lock.json), found 12.21.0"。
+      - name: 安装 Node.js 26 与 pnpm
+        env:
+          PNPM_VER: ${{ needs.check.outputs.pnpm }}
         run: |
           set -euo pipefail
+          test -n "${PNPM_VER}" || { echo "::error::未拿到上游 pnpm pin"; exit 1; }
           NODE_VER="v26.13.0"
           ARCH="$(uname -m)"
           case "${ARCH}" in
@@ -121,14 +162,27 @@ jobs:
           curl -fsSL --retry 3 --max-time 300 -o /tmp/node.tar.xz "${URL}"
           mkdir -p "${HOME}/node"
           tar xf /tmp/node.tar.xz -C "${HOME}/node" --strip-components=1
-          echo "${HOME}/node/bin" >> "${GITHUB_PATH}"
           export PATH="${HOME}/node/bin:${PATH}"
+          echo "${HOME}/node/bin" >> "${GITHUB_PATH}"
           echo "node: $(node -v)"
+
+          # pnpm 12 是 Rust 原生可执行文件：装完会有一条 npm allowScripts 警告，
+          # 表示 preinstall/postinstall 没跑——那两条脚本只负责扩展功能，不影响 pnpm 本体。
+          echo "安装 pnpm ${PNPM_VER}"
+          npm install -g --prefix "${HOME}/node" "pnpm@${PNPM_VER}"
+
+          FOUND="$(pnpm -v)"
+          echo "pnpm: ${FOUND}"
+          if [ "${FOUND}" != "${PNPM_VER}" ]; then
+            echo "::error::pnpm 版本不匹配：期望 ${PNPM_VER}，实际 ${FOUND}"
+            exit 1
+          fi
 
       - name: 记录环境
         run: |
           echo "node: $(node -v)"
           echo "npm:  $(npm -v)"
+          echo "pnpm: $(pnpm -v)"
           echo "date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           echo "upstream tag: ${{ needs.check.outputs.tag }}"
 
