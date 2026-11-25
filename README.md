@@ -1,5 +1,13 @@
 ﻿# Hermes Desktop for fnOS
 
+> [!WARNING]
+> **本项目已归档（2026-11-25），不再维护、不再发布新版本。**
+> 请改用 👉 **[sfy2022/hermes-agent-fnos-manager](https://github.com/sfy2022/hermes-agent-fnos-manager)**
+>
+> 新项目是「管理器 + 官方运行时」架构：先安装管理器，再在管理端里选择版本安装、升级 Hermes，
+> 支持 Docker 容器与原生运行时、镜像源、快照、日志、授权与插件管理。
+> 旧版 fpk（最后 v0.23.0）保留在 Releases 中可回退，但不再修复问题。
+
 飞牛 NAS（fnOS）上的 **Hermes Desktop 官方桌面工作区**。使用上游自带的 Webapp 形态承载，
 不修改上游代码，不需要 Electron，也不依赖虚拟显示或串流。
 
